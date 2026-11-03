@@ -622,6 +622,11 @@ PageContainer {
                     binder: formB
                     field: "tasks.cm.watch_ad_wait_sec"
                 }
+                FormCheckBox {
+                    label: App.Globals.t("settings.field.cm.skip_ap_recovery")
+                    binder: formB
+                    field: "tasks.cm.skip_ap_recovery"
+                }
             }
 
             // ── 活动商店设置 ────────────────────────────────────────────

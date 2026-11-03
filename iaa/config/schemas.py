@@ -136,6 +136,8 @@ class ChallengeLiveConfig(BaseModel):
 class CmConfig(BaseModel):
     enabled: bool = True
     watch_ad_wait_sec: int = 70
+    skip_ap_recovery: bool = False
+    """跳过「恢复 LIVE BONUS」（AP 恢复）广告。"""
 
 
 

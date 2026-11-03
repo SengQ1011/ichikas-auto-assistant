@@ -1189,6 +1189,10 @@ _TRANSLATIONS: dict[str, TStr] = {
         zh_CN='广告等待秒数',
         en_US='Ad wait time (seconds)',
     ),
+    'settings.field.cm.skip_ap_recovery': TStr(
+        zh_CN='跳过 AP 恢复（LIVE BONUS）广告',
+        en_US='Skip AP recovery (LIVE BONUS) ads',
+    ),
     'settings.field.event_shop.purchase_items': TStr(
         zh_CN='购买项',
         en_US='Purchase items',

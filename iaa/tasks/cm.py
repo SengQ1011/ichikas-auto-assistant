@@ -3,7 +3,7 @@ from typing import Callable
 
 from kotonebot import logging
 from kotonebot.core import AnyOf
-from kotonebot import device, task, Loop, action, sleep
+from kotonebot import device, task, Loop, action, sleep, ocr
 
 from . import R
 from .common import go_home
@@ -114,6 +114,40 @@ def open_cm() -> bool:
             return False
     return False
 
+# 「恢复 LIVE BONUS」卡片标题中的关键字（台服：恢復5點LIVE BONUS；日服：ライブボーナス回復）
+_AP_CARD_KEYWORDS = ('bonus', 'ボーナス', '恢復', '恢复', '回復')
+
+
+def _click_play_cm_skipping_ap() -> bool | None:
+    """点击一个非「AP 恢复」卡片的「观看广告」按钮。
+
+    卡片标题位于按钮正上方，用 OCR 读取标题，排除标题含 AP 关键字的卡片。
+
+    :returns: True=已点击；False=画面上没有任何「观看广告」按钮；
+        None=只剩 AP 恢复广告（应视为已全部完成）。
+    """
+    buttons = R.Cm.ButtonPlayCm.find_all()
+    if not buttons:
+        return False
+    ap_titles = [
+        r for r in ocr.ocr()
+        if any(k in r.text.lower() for k in _AP_CARD_KEYWORDS)
+    ]
+    for btn in buttons:
+        bx, by = btn.rect.center
+        is_ap = any(
+            abs(t.rect.center[0] - bx) < 150 and 0 < by - t.rect.center[1] < 130
+            for t in ap_titles
+        )
+        if is_ap:
+            logger.debug('Skipping AP recovery ad card at (%s, %s).', bx, by)
+            continue
+        device.click(bx, by)
+        return True
+    logger.info('Only AP recovery ads remain. Skipped by config.')
+    return None
+
+
 @action('看广告', screenshot_mode='manual')
 def clear_common_cm():
     """
@@ -194,6 +228,7 @@ def clear_common_cm():
 
     state: int = 1 # 1=开始看，2=载入，3=正在看，4=等结果
     wait_sec = get_conf().tasks.cm.watch_ad_wait_sec
+    skip_ap = get_conf().tasks.cm.skip_ap_recovery
     max_provider_exit_attempts = 3
     max_provider_exit_misses = 8
     provider_exit_attempts = 0
@@ -217,7 +252,14 @@ def clear_common_cm():
                 logger.debug('Clicked CM confirmation button.')
                 sleep(1)
                 state = 2
-            elif R.Cm.ButtonPlayCm.try_click():
+            elif skip_ap and (clicked := _click_play_cm_skipping_ap()) is not True:
+                if clicked is None:
+                    # 只剩 AP 恢复广告，视为完成
+                    break
+                if not R.Hud.ButtonGoBack.exists():
+                    logger.info('All ads cleared.')
+                    break
+            elif skip_ap or R.Cm.ButtonPlayCm.try_click():
                 provider_exit_attempts = 0
                 provider_exit_misses = 0
                 ad_load_retries = 0
