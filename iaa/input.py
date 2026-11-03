@@ -12,13 +12,14 @@ ADB_KEYBOARD_ACTIVITY = 'com.android.adbkeyboard/.AdbIME'
 def check_installed(pkg: str) -> bool:
     """检查是否安装了指定的包。"""
     d = device.of_android()
-    ret = d.commands.adb_shell(f'pm list packages | grep {pkg}')
-    return ret.strip() != ''
+    # 不用 grep：找不到时 grep 结束码为 1，MaaFramework 会当成 shell 任务失败而抛错
+    ret = d.commands.adb_shell(f'pm list packages {pkg}')
+    return f'package:{pkg}' in ret.split()
 
 def install_apk(apk_path: str):
     """安装 APK 文件。"""
     d = device.of_android()
-    d.commands.adb.install(apk_path)
+    d.commands.install_apk(apk_path)
     # d.commands.adb_shell(f'push {apk_path} /data/local/tmp/')
     # apk_name = os.path.basename(apk_path)
     # ret = d.commands.adb_shell(f'pm install -r /data/local/tmp/{apk_name}')
@@ -85,8 +86,10 @@ class AdbKeyboardInput:
         :return: 布尔值表示，是否可输入。若无法判断，返回 None。
         """
         d = device.of_android()
-        ret = d.commands.adb_shell('dumpsys input_method | grep mServedInputConnection')
-        ret = ret.strip()
+        # 在 Python 端过滤，不用 grep（理由同 check_installed）
+        out = d.commands.adb_shell('dumpsys input_method')
+        lines = [line.strip() for line in out.splitlines() if 'mServedInputConnection' in line]
+        ret = lines[0] if lines else ''
         if 'mServedInputConnectionWrapper=null' in ret or 'mServedInputConnection=null' in ret:
             return False
         elif ret.startswith('mServedInputConnectionWrapper=') or ret.startswith('mServedInputConnection='):

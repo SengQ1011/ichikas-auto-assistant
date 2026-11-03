@@ -1,5 +1,6 @@
 tmp
 dumps*/
+captures/
 conf/
 .idea
 # 构建产物

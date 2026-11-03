@@ -13,3 +13,6 @@ res:
 
 build:
     uv run build.py build
+
+test:
+    uv run --with pytest python -m pytest tests/ -q --continue-on-collection-errors

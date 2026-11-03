@@ -15,6 +15,8 @@ def auto_live(plan: SingleLoopPlan | ListLoopPlan) -> None:
         raise ValueError('loop_count 必须为正整数或 None。')
     if isinstance(plan, SingleLoopPlan) and plan.song_select_mode == 'specified' and not plan.song_name:
         raise ValueError('song_name is required when song_select_mode is specified.')
+    if isinstance(plan, ListLoopPlan) and plan.play_mode == 'hold_center':
+        raise ValueError('hold_center only supports single-song loop.')
 
     reporter.message(TStr(zh_CN='返回首页准备进入演出', en_US='Returning home before live'))
     go_home()

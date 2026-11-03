@@ -18,7 +18,7 @@ from iaa.definitions.enums import ChallengeLiveAward, GameCharacter
 
 logger = logging.getLogger(__name__)
 LiveMode = Literal['all'] | Literal['once'] | Literal['script'] | int | None
-SoloPlayMode = Literal['game_auto', 'script_auto']
+SoloPlayMode = Literal['game_auto', 'script_auto', 'hold_center']
 SongChoiceMode = Literal['current', 'specified', 'random']
 LoopSongMode = Literal['list_next', 'random']
 ApMultiplier = int | Literal['maximum'] | None
@@ -46,6 +46,10 @@ class SingleLoopPlan(LivePlan):
     loop_count: int | None = None
     song_select_mode: SongChoiceMode = 'current'
     song_name: str | None = None
+    duration_seconds: int | None = None
+    """长按中央模式：时长（秒），None 表示不限。"""
+    until: str | None = None
+    """长按中央模式：结束时刻「HH:MM」，None 表示不限。"""
 
 
 class ListLoopPlan(LivePlan):
@@ -548,6 +552,13 @@ def solo_live(plan: OncePlan | SingleLoopPlan | ListLoopPlan):
     if isinstance(plan, SingleLoopPlan):
         # 单曲循环
         max_count = plan.loop_count or float('inf')
+        # 长按中央（固定 0 火，结算后留在选歌画面循环）
+        if plan.play_mode == 'hold_center':
+            from .hold_center import hold_center_loop
+            reporter.message(TStr(zh_CN='开始单曲循环（长按中央）', en_US='Starting single-song loop (hold center)'))
+            _prepare_solo_live(plan.song_select_mode, plan.song_name)
+            hold_center_loop(plan.loop_count, plan.duration_seconds, plan.until, auto_set_unit)
+            return
         # 游戏内 AUTO
         if plan.play_mode == 'game_auto':
             reporter.message(TStr(zh_CN='开始单曲循环（游戏自动）', en_US='Starting single-song loop (game auto)'))
@@ -745,6 +756,14 @@ def auto_live_payload_to_plan(payload: dict[str, Any]) -> SingleLoopPlan | ListL
         raise ValueError('延迟补偿必须为 0 到 2000 之间的整数（毫秒）。')
     latency_compensation_ms = int(latency_raw)
 
+    hold_center = auto_mode == 'hold_center'
+    duration_seconds: int | None = None
+    until: str | None = None
+    if hold_center:
+        from .hold_center import parse_duration, parse_until
+        duration_seconds = parse_duration(str(payload.get('durationText') or ''))
+        until = parse_until(str(payload.get('untilTime') or ''))
+
     count: int | None = None
     if count_mode == 'specify':
         raw_count = str(payload.get('count') or '').strip()
@@ -756,6 +775,19 @@ def auto_live_payload_to_plan(payload: dict[str, Any]) -> SingleLoopPlan | ListL
 
     ap_multiplier = _normalize_ap_multiplier_raw(ap_multiplier_raw)
 
+    if hold_center:
+        # 长按中央只支持单曲循环，且固定 0 火
+        return SingleLoopPlan(
+            loop_count=count,
+            song_select_mode='specified' if song_name else 'current',
+            song_name=song_name,
+            play_mode='hold_center',
+            debug_enabled=debug_enabled,
+            ap_multiplier=0,
+            auto_set_unit=auto_set_unit,
+            duration_seconds=duration_seconds,
+            until=until,
+        )
     if loop_mode == 'single':
         return SingleLoopPlan(
             loop_count=count,

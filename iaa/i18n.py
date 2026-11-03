@@ -817,6 +817,26 @@ _TRANSLATIONS: dict[str, TStr] = {
         zh_CN='脚本自动',
         en_US='Script auto',
     ),
+    'auto_live.play.hold_center': TStr(
+        zh_CN='长按中央',
+        en_US='Hold center',
+    ),
+    'auto_live.notice.hold_center': TStr(
+        zh_CN='长按中央：固定 0 火、只支持单曲循环，结算后留在选歌画面继续下一首。时长与结束时刻可留空，谁先到就停，并会打完当前这一轮。',
+        en_US='Hold center: AP multiplier fixed to 0, single-song loop only; stays on song select between rounds. Duration and end time are optional; whichever comes first stops after the current round.',
+    ),
+    'auto_live.count.unlimited': TStr(
+        zh_CN='不指定',
+        en_US='Unlimited',
+    ),
+    'auto_live.duration': TStr(
+        zh_CN='时长（例：2h、90m、1h30m）',
+        en_US='Duration (e.g. 2h, 90m, 1h30m)',
+    ),
+    'auto_live.until': TStr(
+        zh_CN='结束时刻（例：23:30）',
+        en_US='End time (e.g. 23:30)',
+    ),
     'auto_live.ap_multiplier': TStr(
         zh_CN='AP 倍率',
         en_US='AP multiplier',

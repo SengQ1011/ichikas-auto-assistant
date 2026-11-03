@@ -27,7 +27,9 @@ Dialog {
             autoSetUnit: false,
             apMultiplier: root.apKeepValue,
             songName: root.songKeepValue,
-            latencyCompensationMs: "0"
+            latencyCompensationMs: "0",
+            durationText: "",
+            untilTime: ""
         }
     }
 
@@ -47,7 +49,9 @@ Dialog {
             autoSetUnit: preset.autoSetUnit,
             apMultiplier: preset.apMultiplier,
             songName: preset.songName || root.songKeepValue,
-            latencyCompensationMs: preset.latencyCompensationMs || "0"
+            latencyCompensationMs: preset.latencyCompensationMs || "0",
+            durationText: preset.durationText || "",
+            untilTime: preset.untilTime || ""
         }
     }
 
@@ -146,7 +150,9 @@ Dialog {
                 onTextEdited: formData = Object.assign({}, formData, { count: text })
             }
             RadioButton {
-                text: App.Globals.t("auto_live.count.all")
+                text: formData.playMode === "hold_center"
+                    ? App.Globals.t("auto_live.count.unlimited")
+                    : App.Globals.t("auto_live.count.all")
                 checked: formData.countMode === "all"
                 onClicked: formData = Object.assign({}, formData, { countMode: "all" })
             }
@@ -156,16 +162,19 @@ Dialog {
             Label { text: App.Globals.t("auto_live.loop_mode") }
             RadioButton {
                 text: App.Globals.t("auto_live.loop.single")
+                enabled: formData.playMode !== "hold_center"
                 checked: formData.loopMode === "single"
                 onClicked: formData = Object.assign({}, formData, { loopMode: "single" })
             }
             RadioButton {
                 text: App.Globals.t("auto_live.loop.list")
+                enabled: formData.playMode !== "hold_center"
                 checked: formData.loopMode === "list"
                 onClicked: formData = Object.assign({}, formData, { loopMode: "list" })
             }
             RadioButton {
                 text: App.Globals.t("auto_live.loop.random")
+                enabled: formData.playMode !== "hold_center"
                 checked: formData.loopMode === "random"
                 onClicked: formData = Object.assign({}, formData, { loopMode: "random" })
             }
@@ -175,6 +184,12 @@ Dialog {
             visible: formData.playMode === "script_auto"
             style: "info"
             content: App.Globals.t("auto_live.notice.ap_locked_zero")
+        }
+
+        FormNotice {
+            visible: formData.playMode === "hold_center"
+            style: "info"
+            content: App.Globals.t("auto_live.notice.hold_center")
         }
 
         RowLayout {
@@ -189,13 +204,18 @@ Dialog {
                 checked: formData.playMode === "script_auto"
                 onClicked: formData = Object.assign({}, formData, { playMode: "script_auto", apMultiplier: "0" })
             }
+            RadioButton {
+                text: App.Globals.t("auto_live.play.hold_center")
+                checked: formData.playMode === "hold_center"
+                onClicked: formData = Object.assign({}, formData, { playMode: "hold_center", apMultiplier: "0", loopMode: "single" })
+            }
         }
 
         RowLayout {
             Label { text: App.Globals.t("auto_live.ap_multiplier") }
             Select {
                 model: root.apMultiplierOptions()
-                enabled: formData.playMode !== "script_auto"
+                enabled: formData.playMode !== "script_auto" && formData.playMode !== "hold_center"
                 currentIndex: Math.max(0, model.indexOf(root.apMultiplierLabel(formData.apMultiplier)))
                 onActivated: formData = Object.assign({}, formData, { apMultiplier: root.apMultiplierValue(model[currentIndex]) })
             }
@@ -208,6 +228,27 @@ Dialog {
             value: root.formData.latencyCompensationMs
             placeholder: ""
             onUserEdited: function(v) { root.updateField("latencyCompensationMs", v) }
+        }
+
+        RowLayout {
+            visible: formData.playMode === "hold_center"
+            Label { text: App.Globals.t("auto_live.duration") }
+            TextField {
+                Layout.fillWidth: true
+                text: formData.durationText
+                onTextEdited: formData = Object.assign({}, formData, { durationText: text })
+            }
+        }
+
+        RowLayout {
+            visible: formData.playMode === "hold_center"
+            Label { text: App.Globals.t("auto_live.until") }
+            TextField {
+                Layout.fillWidth: true
+                text: formData.untilTime
+                placeholderText: "23:30"
+                onTextEdited: formData = Object.assign({}, formData, { untilTime: text })
+            }
         }
 
         RowLayout {

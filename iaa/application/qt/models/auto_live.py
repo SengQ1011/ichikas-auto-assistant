@@ -45,6 +45,14 @@ def auto_live_preset_label_key(name: str) -> str | None:
     return _AUTO_LIVE_PRESET_LABEL_KEYS.get(name)
 
 
+def _format_duration(seconds: int | None) -> str:
+    """把秒数转回对话框使用的「1h30m」格式；None 返回空字串。"""
+    if not seconds:
+        return ''
+    h, m = divmod(seconds // 60, 60)
+    return (f'{h}h' if h else '') + (f'{m}m' if m else '')
+
+
 def preset_to_payload(preset: AutoLivePreset) -> dict[str, object]:
     """把预设转换为 GUI 表单使用的 payload。
 
@@ -67,6 +75,9 @@ def preset_to_payload(preset: AutoLivePreset) -> dict[str, object]:
     if isinstance(plan, SingleLoopPlan):
         payload['loopMode'] = 'single'
         payload['songName'] = plan.song_name or SONG_KEEP_UNCHANGED
+        if plan.play_mode == 'hold_center':
+            payload['durationText'] = _format_duration(plan.duration_seconds)
+            payload['untilTime'] = plan.until or ''
     elif isinstance(plan, ListLoopPlan):
         payload['loopMode'] = 'random' if plan.loop_song_mode == 'random' else 'list'
     return payload
