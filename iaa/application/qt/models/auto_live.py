@@ -78,6 +78,9 @@ def preset_to_payload(preset: AutoLivePreset) -> dict[str, object]:
         if plan.play_mode == 'hold_center':
             payload['durationText'] = _format_duration(plan.duration_seconds)
             payload['untilTime'] = plan.until or ''
+            payload['restEveryText'] = _format_duration(plan.rest_every_seconds)
+            payload['restForText'] = _format_duration(plan.rest_for_seconds)
+            payload['refreshEvery'] = str(plan.refresh_every or '')
     elif isinstance(plan, ListLoopPlan):
         payload['loopMode'] = 'random' if plan.loop_song_mode == 'random' else 'list'
     return payload

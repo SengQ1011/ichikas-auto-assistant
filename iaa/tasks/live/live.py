@@ -50,6 +50,12 @@ class SingleLoopPlan(LivePlan):
     """长按中央模式：时长（秒），None 表示不限。"""
     until: str | None = None
     """长按中央模式：结束时刻「HH:MM」，None 表示不限。"""
+    rest_every_seconds: int | None = None
+    """长按中央模式：每跑多少秒休息一次，None 表示不休息。"""
+    rest_for_seconds: int | None = None
+    """长按中央模式：每次休息多少秒。"""
+    refresh_every: int | None = None
+    """长按中央模式：每打几轮重开一次游戏，None 表示不定时重开。"""
 
 
 class ListLoopPlan(LivePlan):
@@ -557,7 +563,11 @@ def solo_live(plan: OncePlan | SingleLoopPlan | ListLoopPlan):
             from .hold_center import hold_center_loop
             reporter.message(TStr(zh_CN='开始单曲循环（长按中央）', en_US='Starting single-song loop (hold center)'))
             _prepare_solo_live(plan.song_select_mode, plan.song_name)
-            hold_center_loop(plan.loop_count, plan.duration_seconds, plan.until, auto_set_unit)
+            hold_center_loop(
+                plan.loop_count, plan.duration_seconds, plan.until, auto_set_unit,
+                plan.song_select_mode, plan.song_name,
+                plan.rest_every_seconds, plan.rest_for_seconds, plan.refresh_every,
+            )
             return
         # 游戏内 AUTO
         if plan.play_mode == 'game_auto':
@@ -759,10 +769,22 @@ def auto_live_payload_to_plan(payload: dict[str, Any]) -> SingleLoopPlan | ListL
     hold_center = auto_mode == 'hold_center'
     duration_seconds: int | None = None
     until: str | None = None
+    rest_every: int | None = None
+    rest_for: int | None = None
+    refresh_every: int | None = None
     if hold_center:
         from .hold_center import parse_duration, parse_until
         duration_seconds = parse_duration(str(payload.get('durationText') or ''))
         until = parse_until(str(payload.get('untilTime') or ''))
+        rest_every = parse_duration(str(payload.get('restEveryText') or ''))
+        rest_for = parse_duration(str(payload.get('restForText') or ''))
+        if (rest_every is None) != (rest_for is None):
+            raise ValueError('休息的「每隔多久」与「休息多久」要一起填，或都留空。')
+        refresh_raw = str(payload.get('refreshEvery') or '').strip()
+        if refresh_raw:
+            if not refresh_raw.isdigit() or int(refresh_raw) <= 0:
+                raise ValueError('定时重开的轮数必须是正整数。')
+            refresh_every = int(refresh_raw)
 
     count: int | None = None
     if count_mode == 'specify':
@@ -787,6 +809,9 @@ def auto_live_payload_to_plan(payload: dict[str, Any]) -> SingleLoopPlan | ListL
             auto_set_unit=auto_set_unit,
             duration_seconds=duration_seconds,
             until=until,
+            rest_every_seconds=rest_every,
+            rest_for_seconds=rest_for,
+            refresh_every=refresh_every,
         )
     if loop_mode == 'single':
         return SingleLoopPlan(

@@ -29,7 +29,10 @@ Dialog {
             songName: root.songKeepValue,
             latencyCompensationMs: "0",
             durationText: "",
-            untilTime: ""
+            untilTime: "",
+            restEveryText: "",
+            restForText: "",
+            refreshEvery: ""
         }
     }
 
@@ -51,7 +54,10 @@ Dialog {
             songName: preset.songName || root.songKeepValue,
             latencyCompensationMs: preset.latencyCompensationMs || "0",
             durationText: preset.durationText || "",
-            untilTime: preset.untilTime || ""
+            untilTime: preset.untilTime || "",
+            restEveryText: preset.restEveryText || "",
+            restForText: preset.restForText || "",
+            refreshEvery: preset.refreshEvery || ""
         }
     }
 
@@ -248,6 +254,33 @@ Dialog {
                 text: formData.untilTime
                 placeholderText: "23:30"
                 onTextEdited: formData = Object.assign({}, formData, { untilTime: text })
+            }
+        }
+
+        RowLayout {
+            visible: formData.playMode === "hold_center"
+            Label { text: App.Globals.t("auto_live.rest_every") }
+            TextField {
+                Layout.fillWidth: true
+                text: formData.restEveryText
+                onTextEdited: formData = Object.assign({}, formData, { restEveryText: text })
+            }
+            Label { text: App.Globals.t("auto_live.rest_for") }
+            TextField {
+                Layout.fillWidth: true
+                text: formData.restForText
+                onTextEdited: formData = Object.assign({}, formData, { restForText: text })
+            }
+        }
+
+        RowLayout {
+            visible: formData.playMode === "hold_center"
+            Label { text: App.Globals.t("auto_live.refresh_every") }
+            TextField {
+                Layout.fillWidth: true
+                text: formData.refreshEvery
+                placeholderText: "30"
+                onTextEdited: formData = Object.assign({}, formData, { refreshEvery: text })
             }
         }
 

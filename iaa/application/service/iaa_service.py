@@ -45,6 +45,9 @@ class IaaService:
         root_logger.setLevel(logging.INFO)
         logging.getLogger("kotonebot").setLevel(logging.DEBUG)
         logging.getLogger("iaa").setLevel(logging.DEBUG)
+        # 降低杂讯：点击座标与弃用警告不写入（长按中央的点击原因见 logs/hold_center/*/run.log）
+        logging.getLogger("kotonebot.client.input").setLevel(logging.INFO)
+        logging.getLogger("py.warnings").setLevel(logging.ERROR)
 
         # 控制台输出
         # Write console logs to the real stderr to avoid duplicate UI output.

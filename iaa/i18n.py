@@ -837,6 +837,18 @@ _TRANSLATIONS: dict[str, TStr] = {
         zh_CN='结束时刻（例：23:30）',
         en_US='End time (e.g. 23:30)',
     ),
+    'auto_live.rest_every': TStr(
+        zh_CN='每跑多久休息（例：3h）',
+        en_US='Rest every (e.g. 3h)',
+    ),
+    'auto_live.rest_for': TStr(
+        zh_CN='休息多久（例：30m）',
+        en_US='Rest for (e.g. 30m)',
+    ),
+    'auto_live.refresh_every': TStr(
+        zh_CN='每几轮重开游戏',
+        en_US='Restart game every N rounds',
+    ),
     'auto_live.ap_multiplier': TStr(
         zh_CN='AP 倍率',
         en_US='AP multiplier',
