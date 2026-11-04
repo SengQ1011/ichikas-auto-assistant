@@ -46,7 +46,23 @@ Control {
 
     signal activated(int index, var value)
 
-    implicitWidth: row.implicitWidth + leftPadding + rightPadding
+    // 可在此处通过 equalWidth: true 让各段平分整个控件宽度（搭配 Layout.fillWidth 使用）；
+    // 预设 false 时每段按文字宽度排列。
+    property bool equalWidth: false
+    readonly property real _segmentWidth: repeater.count > 0
+        ? (availableWidth - row.spacing * (repeater.count - 1)) / repeater.count : 0
+    // equalWidth 时各段宽度跟着控件宽度变，implicitWidth 改用文字宽度加总，避免 binding loop。
+    readonly property real _naturalWidth: {
+        let w = 0
+        for (let i = 0; i < repeater.count; i++) {
+            const it = repeater.itemAt(i)
+            if (it) w += it.implicitWidth
+        }
+        return w + row.spacing * Math.max(0, repeater.count - 1)
+    }
+    onWidthChanged: if (equalWidth) Qt.callLater(slider.updatePosition)
+
+    implicitWidth: (equalWidth ? _naturalWidth : row.implicitWidth) + leftPadding + rightPadding
     implicitHeight: 36
 
     leftPadding: 3
@@ -145,6 +161,7 @@ Control {
                     property bool itemEnabled: typeof modelData === 'object' ? (modelData.enabled !== false) : true
 
                     implicitWidth: Math.max(60, label.implicitWidth + 20)
+                    width: root.equalWidth ? root._segmentWidth : implicitWidth
                     implicitHeight: 30
 
                     enabled: itemEnabled

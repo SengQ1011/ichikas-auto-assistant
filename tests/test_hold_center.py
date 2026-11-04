@@ -4,7 +4,7 @@ from unittest import mock
 
 from iaa.tasks.live import hold_center
 from iaa.tasks.live.hold_center_log import NullRun
-from iaa.tasks.live.hold_center import compute_deadline, parse_duration, parse_until
+from iaa.tasks.live.hold_center import compute_deadline, parse_duration, parse_rest_for, parse_until
 from iaa.tasks.live.live import SingleLoopPlan, auto_live_payload_to_plan, solo_live
 
 
@@ -18,6 +18,13 @@ class ParseTests(unittest.TestCase):
         for bad in ('abc', '0', '1x', 'h'):
             with self.assertRaises(ValueError):
                 parse_duration(bad)
+
+    def test_parse_rest_for(self) -> None:
+        self.assertEqual(parse_rest_for('0'), 0)
+        self.assertEqual(parse_rest_for('30m'), 1800)
+        for bad in ('', 'abc'):
+            with self.assertRaises(ValueError):
+                parse_rest_for(bad)
 
     def test_parse_until(self) -> None:
         self.assertIsNone(parse_until(''))
@@ -36,40 +43,103 @@ class ParseTests(unittest.TestCase):
 class PayloadTests(unittest.TestCase):
     def test_hold_center_forces_single_loop_and_zero_ap(self) -> None:
         plan = auto_live_payload_to_plan({
-            'countMode': 'all',
+            'countMode': 'duration',
             'loopMode': 'list',
             'playMode': 'hold_center',
             'apMultiplier': 'maximum',
             'durationText': '1h30m',
-            'untilTime': '23:30',
+            'untilTime': '23:30',   # 选了时长，结束时刻不会被读
         })
         self.assertIsInstance(plan, SingleLoopPlan)
         self.assertEqual(plan.play_mode, 'hold_center')
         self.assertEqual(plan.ap_multiplier, 0)
         self.assertIsNone(plan.loop_count)
         self.assertEqual(plan.duration_seconds, 5400)
-        self.assertEqual(plan.until, '23:30')
+        self.assertIsNone(plan.until)
 
-    def test_rest_and_refresh_fields(self) -> None:
+    def test_one_stop_condition(self) -> None:
+        base = {'playMode': 'hold_center', 'count': '5', 'durationText': '2h', 'untilTime': '23:30'}
+        plan = auto_live_payload_to_plan({**base, 'countMode': 'until'})
+        self.assertEqual((plan.loop_count, plan.duration_seconds, plan.until), (None, None, '23:30'))
+        plan = auto_live_payload_to_plan({**base, 'countMode': 'specify'})
+        self.assertEqual((plan.loop_count, plan.duration_seconds, plan.until), (5, None, None))
+        plan = auto_live_payload_to_plan({**base, 'countMode': 'all'})
+        self.assertEqual((plan.loop_count, plan.duration_seconds, plan.until), (None, None, None))
+        for mode, key in (('duration', 'durationText'), ('until', 'untilTime')):
+            with self.assertRaises(ValueError):
+                auto_live_payload_to_plan({**base, 'countMode': mode, key: ''})
+
+    def test_rest_fields(self) -> None:
         plan = auto_live_payload_to_plan({
             'countMode': 'all', 'playMode': 'hold_center',
-            'restEveryText': '3h', 'restForText': '30m', 'refreshEvery': '30',
+            'restMode': 'time', 'restEveryText': '3h', 'restForText': '30m', 'restEveryRounds': '9',
         })
         self.assertEqual(plan.rest_every_seconds, 10800)
+        self.assertIsNone(plan.rest_every_rounds)
         self.assertEqual(plan.rest_for_seconds, 1800)
-        self.assertEqual(plan.refresh_every, 30)
-        with self.assertRaises(ValueError):
-            auto_live_payload_to_plan({'countMode': 'all', 'playMode': 'hold_center', 'restEveryText': '3h'})
-        with self.assertRaises(ValueError):
-            auto_live_payload_to_plan({'countMode': 'all', 'playMode': 'hold_center', 'refreshEvery': '0'})
+        plan = auto_live_payload_to_plan({
+            'countMode': 'all', 'playMode': 'hold_center',
+            'restMode': 'rounds', 'restEveryRounds': '30', 'restForText': '0',
+        })
+        self.assertEqual(plan.rest_every_rounds, 30)
+        self.assertEqual(plan.rest_for_seconds, 0)
+        plan = auto_live_payload_to_plan({'countMode': 'all', 'playMode': 'hold_center', 'restEveryText': '3h'})
+        self.assertIsNone(plan.rest_every_seconds)   # restMode 预设 none
+        for bad in (
+            {'restMode': 'time', 'restEveryText': '3h'},              # 没填休息多久
+            {'restMode': 'rounds', 'restEveryRounds': '0', 'restForText': '0'},
+            {'restMode': 'time', 'restEveryText': 'x', 'restForText': '0'},
+        ):
+            with self.assertRaises(ValueError):
+                auto_live_payload_to_plan({'countMode': 'all', 'playMode': 'hold_center', **bad})
 
     def test_other_modes_ignore_time_fields(self) -> None:
         plan = auto_live_payload_to_plan({
             'countMode': 'specify', 'count': '3', 'loopMode': 'single',
-            'playMode': 'game_auto', 'durationText': 'garbage',
+            'playMode': 'game_auto', 'durationText': 'garbage', 'restMode': 'time',
         })
         self.assertEqual(plan.play_mode, 'game_auto')
         self.assertIsNone(plan.duration_seconds)
+        self.assertIsNone(plan.rest_every_seconds)
+        with self.assertRaises(Exception):
+            auto_live_payload_to_plan({'countMode': 'duration', 'durationText': '2h', 'loopMode': 'list'})
+
+
+class LegacyPlanTests(unittest.TestCase):
+    """旧版 last_auto.json（有 refresh_every、同时设多个停止条件）读取时自动转换。"""
+
+    def _plan(self, **fields):
+        return SingleLoopPlan.model_validate({'play_mode': 'hold_center', 'ap_multiplier': 0, **fields})
+
+    def test_current_user_file(self) -> None:
+        plan = self._plan(loop_count=None, duration_seconds=600, until=None,
+                          rest_every_seconds=300, rest_for_seconds=60, refresh_every=None)
+        self.assertEqual((plan.duration_seconds, plan.rest_every_seconds, plan.rest_for_seconds), (600, 300, 60))
+
+    def test_refresh_becomes_rest_zero(self) -> None:
+        plan = self._plan(refresh_every=30)
+        self.assertEqual((plan.rest_every_rounds, plan.rest_for_seconds), (30, 0))
+
+    def test_rest_wins_over_refresh(self) -> None:
+        plan = self._plan(rest_every_seconds=3600, rest_for_seconds=600, refresh_every=30)
+        self.assertIsNone(plan.rest_every_rounds)
+        self.assertEqual(plan.rest_every_seconds, 3600)
+
+    def test_stop_priority_until_duration_count(self) -> None:
+        plan = self._plan(loop_count=5, duration_seconds=600, until='23:30')
+        self.assertEqual((plan.loop_count, plan.duration_seconds, plan.until), (None, None, '23:30'))
+        plan = self._plan(loop_count=5, duration_seconds=600)
+        self.assertEqual((plan.loop_count, plan.duration_seconds), (None, 600))
+
+    def test_preset_round_trip(self) -> None:
+        from iaa.application.qt.models.auto_live import preset_to_payload
+        from iaa.config.live_presets import AutoLivePreset
+        plan = self._plan(until='23:30', refresh_every=30, song_select_mode='specified', song_name='メルト')
+        payload = preset_to_payload(AutoLivePreset(name='x', plan=plan))
+        self.assertEqual(payload['countMode'], 'until')
+        self.assertEqual((payload['restMode'], payload['restEveryRounds'], payload['restForText']), ('rounds', '30', '0'))
+        again = auto_live_payload_to_plan(payload)
+        self.assertEqual(again.model_dump(), plan.model_dump())
 
 
 class _FakeReporter:
@@ -83,9 +153,9 @@ class DispatchTests(unittest.TestCase):
     @mock.patch('iaa.tasks.live.live.start_auto_live')
     def test_solo_live_dispatches_hold_center(self, start_auto_live, prepare, _rep) -> None:
         with mock.patch.object(hold_center, 'hold_center_loop') as loop:
-            solo_live(SingleLoopPlan(loop_count=5, play_mode='hold_center', ap_multiplier=0, until='23:30'))
+            solo_live(SingleLoopPlan(play_mode='hold_center', ap_multiplier=0, until='23:30'))
         prepare.assert_called_once_with('current', None)
-        loop.assert_called_once_with(5, None, '23:30', False, 'current', None, None, None, None)
+        loop.assert_called_once_with(None, None, '23:30', False, 'current', None, None, None, None)
         start_auto_live.assert_not_called()
 
 
@@ -156,8 +226,10 @@ class StuckRecoveryTests(unittest.TestCase):
 @mock.patch.object(hold_center, 'ensure_zero_fire')
 @mock.patch.object(hold_center, '_restart_game')
 class RestRefreshTests(unittest.TestCase):
-    def test_refresh_every_n_rounds_rechecks_zero_fire(self, restart, zero, *_mocks) -> None:
-        hold_center.hold_center_loop(5, None, None, refresh_every=2)
+    def test_rest_zero_every_n_rounds_restarts_and_rechecks_zero_fire(self, restart, zero, *_mocks) -> None:
+        with mock.patch.object(hold_center, '_rest') as rest:
+            hold_center.hold_center_loop(5, None, None, rest_every_rounds=2, rest_for=0)
+        rest.assert_not_called()                 # 休息 0＝直接重开，不进入休息
         self.assertEqual(restart.call_count, 2)  # 第 2、4 轮后
         self.assertEqual(zero.call_count, 3)
 
@@ -169,7 +241,7 @@ class RestRefreshTests(unittest.TestCase):
 
     def test_rest_then_relaunch(self, restart, zero, *_mocks) -> None:
         with self._fake_clock(), mock.patch.object(hold_center, '_rest', return_value=False) as rest:
-            hold_center.hold_center_loop(2, None, None, rest_every=1, rest_for=60)
+            hold_center.hold_center_loop(2, None, None, rest_every_seconds=1, rest_for=60)
         # 第 1 轮后休息并重开；第 2 轮后已达次数，直接结束不再休息
         rest.assert_called_once()
         restart.assert_called_once()
@@ -177,7 +249,7 @@ class RestRefreshTests(unittest.TestCase):
 
     def test_deadline_reached_during_rest_ends_without_relaunch(self, restart, zero, *_mocks) -> None:
         with self._fake_clock(), mock.patch.object(hold_center, '_rest', return_value=True) as rest:
-            hold_center.hold_center_loop(None, None, None, rest_every=1, rest_for=60)
+            hold_center.hold_center_loop(None, None, None, rest_every_seconds=1, rest_for=60)
         rest.assert_called_once()
         restart.assert_not_called()
 

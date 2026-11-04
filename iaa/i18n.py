@@ -766,31 +766,27 @@ _TRANSLATIONS: dict[str, TStr] = {
         en_US='Last settings',
     ),
     'auto_live.notice.ap_locked_zero': TStr(
-        zh_CN='为避免滥用，脚本自动时 AP 锁定 0。',
-        en_US='To prevent abuse, AP multiplier is locked to 0 in script auto mode.',
+        zh_CN='固定 0 火（为避免滥用）',
+        en_US='AP multiplier fixed to 0 (to prevent abuse)',
     ),
     'auto_live.notice.no_last_preset': TStr(
         zh_CN='没有找到上次设定',
         en_US='No previous settings found',
     ),
     'auto_live.count': TStr(
-        zh_CN='演出次数',
-        en_US='Live count',
+        zh_CN='跑多久',
+        en_US='Run for',
     ),
     'auto_live.count.specify': TStr(
-        zh_CN='指定次数',
-        en_US='Specified',
-    ),
-    'auto_live.count.placeholder': TStr(
-        zh_CN='次数',
-        en_US='Count',
+        zh_CN='N 轮',
+        en_US='N rounds',
     ),
     'auto_live.count.all': TStr(
         zh_CN='直到 AP 耗尽',
         en_US='Until AP runs out',
     ),
     'auto_live.loop_mode': TStr(
-        zh_CN='循环模式',
+        zh_CN='循环方式',
         en_US='Loop mode',
     ),
     'auto_live.loop.single': TStr(
@@ -806,8 +802,8 @@ _TRANSLATIONS: dict[str, TStr] = {
         en_US='Shuffle',
     ),
     'auto_live.play_mode': TStr(
-        zh_CN='自动模式',
-        en_US='Auto mode',
+        zh_CN='演出方式',
+        en_US='Play mode',
     ),
     'auto_live.play.game_auto': TStr(
         zh_CN='游戏自动',
@@ -822,32 +818,100 @@ _TRANSLATIONS: dict[str, TStr] = {
         en_US='Hold center',
     ),
     'auto_live.notice.hold_center': TStr(
-        zh_CN='长按中央：固定 0 火、只支持单曲循环，结算后留在选歌画面继续下一首。时长与结束时刻可留空，谁先到就停，并会打完当前这一轮。',
-        en_US='Hold center: AP multiplier fixed to 0, single-song loop only; stays on song select between rounds. Duration and end time are optional; whichever comes first stops after the current round.',
+        zh_CN='固定 0 火・单曲循环，结算后留在选歌画面',
+        en_US='AP multiplier fixed to 0, single-song loop; stays on song select between rounds',
     ),
     'auto_live.count.unlimited': TStr(
-        zh_CN='不指定',
+        zh_CN='不限',
         en_US='Unlimited',
     ),
-    'auto_live.duration': TStr(
-        zh_CN='时长（例：2h、90m、1h30m）',
-        en_US='Duration (e.g. 2h, 90m, 1h30m)',
+    'auto_live.count.duration': TStr(
+        zh_CN='时长',
+        en_US='Duration',
     ),
-    'auto_live.until': TStr(
-        zh_CN='结束时刻（例：23:30）',
-        en_US='End time (e.g. 23:30)',
+    'auto_live.count.until': TStr(
+        zh_CN='到某时刻',
+        en_US='Until a time',
     ),
-    'auto_live.rest_every': TStr(
-        zh_CN='每跑多久休息（例：3h）',
-        en_US='Rest every (e.g. 3h)',
+    'auto_live.rest': TStr(
+        zh_CN='休息',
+        en_US='Rest',
     ),
-    'auto_live.rest_for': TStr(
-        zh_CN='休息多久（例：30m）',
-        en_US='Rest for (e.g. 30m)',
+    'auto_live.rest.none': TStr(
+        zh_CN='不休息',
+        en_US='No rest',
     ),
-    'auto_live.refresh_every': TStr(
-        zh_CN='每几轮重开游戏',
-        en_US='Restart game every N rounds',
+    'auto_live.rest.rounds': TStr(
+        zh_CN='每 N 轮',
+        en_US='Every N rounds',
+    ),
+    'auto_live.rest.time': TStr(
+        zh_CN='每一段时间',
+        en_US='Every period',
+    ),
+    'auto_live.rest.every': TStr(
+        zh_CN='每',
+        en_US='Every',
+    ),
+    'auto_live.rest.for': TStr(
+        zh_CN='休息',
+        en_US='rest',
+    ),
+    'auto_live.unit.rounds': TStr(
+        zh_CN='轮',
+        en_US='rounds',
+    ),
+    'auto_live.unit.ms': TStr(
+        zh_CN='毫秒',
+        en_US='ms',
+    ),
+    'auto_live.unit.hours': TStr(
+        zh_CN='小时',
+        en_US='h',
+    ),
+    'auto_live.unit.minutes': TStr(
+        zh_CN='分',
+        en_US='min',
+    ),
+    'auto_live.latency': TStr(
+        zh_CN='延迟补偿',
+        en_US='Latency',
+    ),
+    'auto_live.hint.latency': TStr(
+        zh_CN='云游戏才需要填，本地模拟器填 0',
+        en_US='Only for cloud gaming; use 0 for local emulators',
+    ),
+    'auto_live.hint.time_format': TStr(
+        zh_CN='格式不对，例：2h、90m、1h30m',
+        en_US='Invalid format, e.g. 2h, 90m, 1h30m',
+    ),
+    'auto_live.hint.until': TStr(
+        zh_CN='例：23:30；今天已过这个时间就算明天',
+        en_US='e.g. 23:30; if already past today, means tomorrow',
+    ),
+    'auto_live.hint.duration_example': TStr(
+        zh_CN='例：2h、90m、1h30m',
+        en_US='e.g. 2h, 90m, 1h30m',
+    ),
+    'auto_live.hint.until_format': TStr(
+        zh_CN='格式不对，例：23:30',
+        en_US='Invalid format, e.g. 23:30',
+    ),
+    'auto_live.hint.positive_int': TStr(
+        zh_CN='请填正整数',
+        en_US='Enter a positive whole number',
+    ),
+    'auto_live.hint.rest_for_empty': TStr(
+        zh_CN='填 0 = 不休息，直接重开游戏',
+        en_US='0 = no rest, restart the game right away',
+    ),
+    'auto_live.hint.rest_for_zero': TStr(
+        zh_CN='= 不休息，直接重开游戏',
+        en_US='= no rest, restart the game right away',
+    ),
+    'auto_live.hint.fix_errors': TStr(
+        zh_CN='有栏位格式不对，请先修正',
+        en_US='Some fields are invalid',
     ),
     'auto_live.ap_multiplier': TStr(
         zh_CN='AP 倍率',
@@ -862,7 +926,7 @@ _TRANSLATIONS: dict[str, TStr] = {
         en_US='Maximum',
     ),
     'auto_live.song_name': TStr(
-        zh_CN='歌曲名称',
+        zh_CN='歌曲',
         en_US='Song',
     ),
     'auto_live.song.keep': TStr(
@@ -870,8 +934,8 @@ _TRANSLATIONS: dict[str, TStr] = {
         en_US='Keep current',
     ),
     'auto_live.debug_display': TStr(
-        zh_CN='调试显示（脚本自动）',
-        en_US='Debug display (script auto)',
+        zh_CN='调试显示',
+        en_US='Debug display',
     ),
     'auto_live.auto_set_unit': TStr(
         zh_CN='自动编队',

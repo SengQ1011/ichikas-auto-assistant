@@ -62,6 +62,7 @@ def preset_to_payload(preset: AutoLivePreset) -> dict[str, object]:
     plan = preset.plan
     payload: dict[str, object] = {
         'name': preset.name,
+        'restMode': 'none',
         'countMode': 'all' if plan.loop_count is None else 'specify',
         'count': '' if plan.loop_count is None else str(plan.loop_count),
         'playMode': plan.play_mode,
@@ -76,11 +77,20 @@ def preset_to_payload(preset: AutoLivePreset) -> dict[str, object]:
         payload['loopMode'] = 'single'
         payload['songName'] = plan.song_name or SONG_KEEP_UNCHANGED
         if plan.play_mode == 'hold_center':
-            payload['durationText'] = _format_duration(plan.duration_seconds)
-            payload['untilTime'] = plan.until or ''
-            payload['restEveryText'] = _format_duration(plan.rest_every_seconds)
-            payload['restForText'] = _format_duration(plan.rest_for_seconds)
-            payload['refreshEvery'] = str(plan.refresh_every or '')
+            if plan.duration_seconds:
+                payload['countMode'] = 'duration'
+                payload['durationText'] = _format_duration(plan.duration_seconds)
+            elif plan.until:
+                payload['countMode'] = 'until'
+                payload['untilTime'] = plan.until
+            if plan.rest_every_rounds is not None:
+                payload['restMode'] = 'rounds'
+                payload['restEveryRounds'] = str(plan.rest_every_rounds)
+            elif plan.rest_every_seconds is not None:
+                payload['restMode'] = 'time'
+                payload['restEveryText'] = _format_duration(plan.rest_every_seconds)
+            if plan.rest_for_seconds is not None:
+                payload['restForText'] = _format_duration(plan.rest_for_seconds) or '0'
     elif isinstance(plan, ListLoopPlan):
         payload['loopMode'] = 'random' if plan.loop_song_mode == 'random' else 'list'
     return payload

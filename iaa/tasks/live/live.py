@@ -1,6 +1,6 @@
 from typing import Any, Callable, Literal, TypeVar
 from typing_extensions import assert_never
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from kotonebot import logging
 from kotonebot.core import AnyOf, Prefab
@@ -46,16 +46,54 @@ class SingleLoopPlan(LivePlan):
     loop_count: int | None = None
     song_select_mode: SongChoiceMode = 'current'
     song_name: str | None = None
+    # 长按中央模式的「跑多久」：loop_count / duration_seconds / until 三者最多一个有值，都没有表示不限。
     duration_seconds: int | None = None
-    """长按中央模式：时长（秒），None 表示不限。"""
+    """长按中央模式：时长（秒，从开始算、含休息），None 表示不以时长停止。"""
     until: str | None = None
-    """长按中央模式：结束时刻「HH:MM」，None 表示不限。"""
+    """长按中央模式：结束时刻「HH:MM」，None 表示不以时刻停止。"""
+    # 长按中央模式的「休息」：rest_every_rounds / rest_every_seconds 最多一个有值，都没有表示不休息。
+    rest_every_rounds: int | None = None
+    """长按中央模式：每打几轮休息一次。"""
     rest_every_seconds: int | None = None
-    """长按中央模式：每跑多少秒休息一次，None 表示不休息。"""
+    """长按中央模式：每跑多少秒休息一次。"""
     rest_for_seconds: int | None = None
-    """长按中央模式：每次休息多少秒。"""
-    refresh_every: int | None = None
-    """长按中央模式：每打几轮重开一次游戏，None 表示不定时重开。"""
+    """长按中央模式：每次休息多少秒；0 表示不休息、直接重开游戏。"""
+
+    @model_validator(mode='before')
+    @classmethod
+    def _migrate_legacy(cls, data: Any) -> Any:
+        """把旧版「上次设定」转成新结构。
+
+        - ``refresh_every``（每 N 轮重开）→ 每 N 轮休息 0；已有休息设定时丢弃。
+        - 停止条件同时设了好几个时只留一个：结束时刻 > 时长 > 次数。
+        """
+        if not isinstance(data, dict) or data.get('play_mode') != 'hold_center':
+            return data
+        data = dict(data)
+        refresh = data.pop('refresh_every', None)
+        if refresh and not data.get('rest_every_seconds') and not data.get('rest_every_rounds'):
+            data['rest_every_rounds'] = refresh
+            data['rest_for_seconds'] = 0
+        if data.get('until'):
+            data['duration_seconds'] = None
+            data['loop_count'] = None
+        elif data.get('duration_seconds'):
+            data['loop_count'] = None
+        return data
+
+    @model_validator(mode='after')
+    def _check_hold_center(self) -> 'SingleLoopPlan':
+        if self.play_mode != 'hold_center':
+            return self
+        stops = [v for v in (self.loop_count, self.duration_seconds, self.until) if v is not None]
+        if len(stops) > 1:
+            raise ValueError('长按中央的停止条件只能设一个（次数、时长或结束时刻）。')
+        if self.rest_every_rounds is not None and self.rest_every_seconds is not None:
+            raise ValueError('休息只能按轮数或按时间其中一种。')
+        has_rest = self.rest_every_rounds is not None or self.rest_every_seconds is not None
+        if has_rest != (self.rest_for_seconds is not None):
+            raise ValueError('设了「每多久休息」就要设「休息多久」（0 表示直接重开）。')
+        return self
 
 
 class ListLoopPlan(LivePlan):
@@ -566,7 +604,7 @@ def solo_live(plan: OncePlan | SingleLoopPlan | ListLoopPlan):
             hold_center_loop(
                 plan.loop_count, plan.duration_seconds, plan.until, auto_set_unit,
                 plan.song_select_mode, plan.song_name,
-                plan.rest_every_seconds, plan.rest_for_seconds, plan.refresh_every,
+                plan.rest_every_rounds, plan.rest_every_seconds, plan.rest_for_seconds,
             )
             return
         # 游戏内 AUTO
@@ -767,33 +805,48 @@ def auto_live_payload_to_plan(payload: dict[str, Any]) -> SingleLoopPlan | ListL
     latency_compensation_ms = int(latency_raw)
 
     hold_center = auto_mode == 'hold_center'
+
+    # 跑多久：specify＝N 轮；all＝不限／直到 AP 耗尽；duration、until 仅长按中央。
+    count: int | None = None
     duration_seconds: int | None = None
     until: str | None = None
-    rest_every: int | None = None
-    rest_for: int | None = None
-    refresh_every: int | None = None
-    if hold_center:
-        from .hold_center import parse_duration, parse_until
-        duration_seconds = parse_duration(str(payload.get('durationText') or ''))
-        until = parse_until(str(payload.get('untilTime') or ''))
-        rest_every = parse_duration(str(payload.get('restEveryText') or ''))
-        rest_for = parse_duration(str(payload.get('restForText') or ''))
-        if (rest_every is None) != (rest_for is None):
-            raise ValueError('休息的「每隔多久」与「休息多久」要一起填，或都留空。')
-        refresh_raw = str(payload.get('refreshEvery') or '').strip()
-        if refresh_raw:
-            if not refresh_raw.isdigit() or int(refresh_raw) <= 0:
-                raise ValueError('定时重开的轮数必须是正整数。')
-            refresh_every = int(refresh_raw)
-
-    count: int | None = None
     if count_mode == 'specify':
         raw_count = str(payload.get('count') or '').strip()
         if not raw_count.isdigit() or int(raw_count) <= 0:
             raise AutoLivePayloadError('auto_live.error.count_positive')
         count = int(raw_count)
+    elif count_mode in ('duration', 'until') and hold_center:
+        from .hold_center import parse_duration, parse_until
+        if count_mode == 'duration':
+            duration_seconds = parse_duration(str(payload.get('durationText') or ''))
+            if duration_seconds is None:
+                raise ValueError('请填写时长（例：2h、90m、1h30m）。')
+        else:
+            until = parse_until(str(payload.get('untilTime') or ''))
+            if until is None:
+                raise ValueError('请填写结束时刻（例：23:30）。')
     elif count_mode != 'all':
         raise AutoLivePayloadError('auto_live.error.unknown_count_mode', mode=count_mode)
+
+    # 休息：none / rounds（每 N 轮）/ time（每一段时间）；休息多久填 0 表示直接重开游戏。
+    rest_every_rounds: int | None = None
+    rest_every_seconds: int | None = None
+    rest_for_seconds: int | None = None
+    rest_mode = str(payload.get('restMode') or 'none')
+    if hold_center and rest_mode != 'none':
+        from .hold_center import parse_duration, parse_rest_for
+        if rest_mode == 'rounds':
+            raw = str(payload.get('restEveryRounds') or '').strip()
+            if not raw.isdigit() or int(raw) <= 0:
+                raise ValueError('「每几轮休息」必须是正整数。')
+            rest_every_rounds = int(raw)
+        elif rest_mode == 'time':
+            rest_every_seconds = parse_duration(str(payload.get('restEveryText') or ''))
+            if rest_every_seconds is None:
+                raise ValueError('请填写每隔多久休息（例：3h）。')
+        else:
+            raise ValueError(f'未知的休息模式：{rest_mode}')
+        rest_for_seconds = parse_rest_for(str(payload.get('restForText') or ''))
 
     ap_multiplier = _normalize_ap_multiplier_raw(ap_multiplier_raw)
 
@@ -809,9 +862,9 @@ def auto_live_payload_to_plan(payload: dict[str, Any]) -> SingleLoopPlan | ListL
             auto_set_unit=auto_set_unit,
             duration_seconds=duration_seconds,
             until=until,
-            rest_every_seconds=rest_every,
-            rest_for_seconds=rest_for,
-            refresh_every=refresh_every,
+            rest_every_rounds=rest_every_rounds,
+            rest_every_seconds=rest_every_seconds,
+            rest_for_seconds=rest_for_seconds,
         )
     if loop_mode == 'single':
         return SingleLoopPlan(

@@ -4,7 +4,7 @@
 - 打歌时关闭游戏 AUTO，长按判定线中央直到这首结束（只为完成演出次数／队长次数，不追求分数）。
 - 结算后直接回到选歌画面，下一轮从选歌画面点「决定」开始，不回首页。
 - 0 火：开始时用 OCR 确认 AP 倍率为 0，确认不了就停止任务。
-- 次数与时间：指定次数／不指定，加上可选的时长与结束时刻；谁先到就停，一律打完当前这一轮。
+- 停止时一律打完当前这一轮。
 - 点击规则（同 rhythm-auto）：每个画面只点一次；点完 RETAP_AFTER 秒画面没换、而且画面静止，才补点。
   「前往选择歌曲」点按钮左端：按钮中央换到选歌画面后正好是「随机选歌」，补点落到那里就会换歌。
 - 换歌：第 1 轮记下封面与歌名（OCR），之后每轮按开始前比对；换了就关游戏重开、搜寻歌名找回，
@@ -15,9 +15,9 @@
   打歌时打开 Android「显示触控」，模拟器画面上看得到按住的位置；打完这首就恢复原设定。
 - 卡住处理：某一步超过时限、或打歌画面冻结，就关闭游戏重开、回到选歌画面继续；
   连续重开 MAX_RESTARTS 次仍卡住才停止任务。重开后会重新确认 0 火。
-- 休息：每跑一段时间，打完当前这一轮就关闭游戏休息，时间到再重开；休息时间算在总时长里，
-  休息中到了结束时间就直接结束。
-- 定时重开：每打 N 轮重开一次游戏（游戏跑久会越来越慢）。
+- 跑多久：不限／N 轮／时长／结束时刻，只能选一种；时长从开始算，含休息时间。
+- 休息：每 N 轮或每一段时间，打完当前这一轮就关闭游戏休息，时间到再重开；
+  休息中到了结束时间就直接结束。休息 0 秒＝不休息、直接重开（游戏跑久会越来越慢）。
 - 记录、通知、样本收集见 hold_center_log.py（logs/hold_center/、learning/inbox/）。
 
 可在此处调整的参数见下方常量。
@@ -144,6 +144,21 @@ def parse_until(text: str) -> str | None:
     except ValueError as exc:
         raise ValueError(f'结束时刻格式不对：{text}（例：23:30）') from exc
     return t.strftime('%H:%M')
+
+
+def parse_rest_for(text: str) -> int:
+    """解析「休息多久」：「0」表示直接重开（返回 0），其他同 :func:`parse_duration`。
+
+    :raises ValueError: 留空或格式不对时。
+    """
+    s = (text or '').strip()
+    if not s:
+        raise ValueError('请填写休息多久（填 0 表示直接重开游戏）。')
+    if s == '0':
+        return 0
+    seconds = parse_duration(s)
+    assert seconds is not None
+    return seconds
 
 
 def compute_deadline(duration_seconds: int | None, until: str | None, now: datetime | None = None) -> datetime | None:
@@ -700,9 +715,9 @@ def hold_center_loop(
     auto_set_unit: bool = False,
     song_select_mode: str = 'current',
     song_name: str | None = None,
-    rest_every: int | None = None,
+    rest_every_rounds: int | None = None,
+    rest_every_seconds: int | None = None,
     rest_for: int | None = None,
-    refresh_every: int | None = None,
 ) -> None:
     """前置：编队画面（由 _prepare_solo_live 进入）。
 
@@ -712,9 +727,9 @@ def hold_center_loop(
     :param auto_set_unit: 第一轮开始前是否自动编队。
     :param song_select_mode: 重开游戏后重新选歌用（同 _prepare_solo_live）。
     :param song_name: 同上。
-    :param rest_every: 每跑多少秒休息一次；None 表示不休息（需与 rest_for 一起设定）。
-    :param rest_for: 每次休息多少秒。
-    :param refresh_every: 每打几轮重开一次游戏；None 表示不定时重开。
+    :param rest_every_rounds: 每打几轮休息一次；与 rest_every_seconds 最多设一个，都 None 表示不休息。
+    :param rest_every_seconds: 每跑多少秒休息一次。
+    :param rest_for: 每次休息多少秒；0 表示不休息、直接重开游戏。
     """
     global _run
     rep = task_reporter()
@@ -722,7 +737,7 @@ def hold_center_loop(
     settings = {
         '次數': loop_count or '不指定', '時長秒數': duration_seconds, '結束時刻': until,
         '截止': deadline.strftime('%m-%d %H:%M') if deadline else None, '歌曲': song_name or song_select_mode,
-        '休息': f'每 {rest_every} 秒休息 {rest_for} 秒' if rest_every else None, '每幾輪重開': refresh_every,
+        '休息': _rest_text(rest_every_rounds, rest_every_seconds, rest_for),
     }
     _run = _make_run(settings)
     run = _run
@@ -731,7 +746,7 @@ def hold_center_loop(
     reason = '未正常結束'
     try:
         reason = _loop(rep, deadline, loop_count, auto_set_unit, song_select_mode, song_name,
-                       rest_every, rest_for, refresh_every)
+                       rest_every_rounds, rest_every_seconds, rest_for)
     except HoldCenterStop as e:
         reason = f'停止：{e}'
         _stop_and_close(run, str(e))
@@ -751,8 +766,15 @@ def hold_center_loop(
         _run = NullRun()
 
 
+def _rest_text(every_rounds: int | None, every_seconds: int | None, rest_for: int | None) -> str | None:
+    if every_rounds is None and every_seconds is None:
+        return None
+    every = f'每 {every_rounds} 輪' if every_rounds is not None else f'每 {every_seconds} 秒'
+    return f'{every}直接重開' if not rest_for else f'{every}休息 {rest_for} 秒'
+
+
 def _loop(rep, deadline, loop_count, auto_set_unit, song_select_mode, song_name,
-          rest_every, rest_for, refresh_every) -> str:
+          rest_every_rounds, rest_every_seconds, rest_for) -> str:
     """主循环；返回结束原因。"""
     run = _run
     if deadline:
@@ -834,16 +856,21 @@ def _loop(rep, deadline, loop_count, auto_set_unit, song_select_mode, song_name,
                 return '時間到'
 
             try:
-                if rest_every and rest_for and time.time() - awake_since >= rest_every:
+                rest_due = (
+                    (rest_every_rounds is not None and rounds_since_launch >= rest_every_rounds)
+                    or (rest_every_seconds is not None and time.time() - awake_since >= rest_every_seconds)
+                )
+                if not rest_due:
+                    continue
+                if rest_for:
                     if _rest(rest_for, deadline):
                         return '休息中時間到'
                     _restart_game(song_select_mode, song_name, TStr(zh_CN='休息结束，重新启动游戏', en_US='Rest over, relaunching'))
-                elif refresh_every and rounds_since_launch >= refresh_every:
+                else:
+                    # 休息 0 秒＝不休息、直接重开（定时重开）
                     run.log.info('选歌画面', f'已打 {rounds_since_launch} 輪，定時重開遊戲')
                     run.log.stats['refreshes'] += 1
                     _restart_game(song_select_mode, song_name, TStr(zh_CN=f'已打 {rounds_since_launch} 轮，定时重开游戏', en_US='Periodic game restart'))
-                else:
-                    continue
             except RoundStuck as e:
                 # 重开时就卡住：交给下一轮开头的卡住处理
                 run.log.warn('重開', f'重開時卡住：{e}')
