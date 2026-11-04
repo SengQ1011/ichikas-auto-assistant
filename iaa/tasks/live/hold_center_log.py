@@ -5,7 +5,7 @@
     logs/hold_center/日期_時間/
         run.log        每行「時間 | 等級 | 畫面 | 訊息」，每次點擊都寫原因
         summary.txt    總結（每輪結束與每分鐘更新一次，就算被強制關掉也留得下來）
-        runs.csv       每輪一行：準備／打歌／結算秒數
+        runs.csv       每輪一行：準備／打歌／結算秒數、結果（CLEAR／FAILED／未知）
         steps.csv      每一步的耗時；比最近中位數慢 1.5 倍的會截圖
         screenshots/   卡住、重開、換歌、誤回主頁、慢的步驟
     logs/hold_center/history.csv   每次執行一行（跨執行累積）
@@ -34,11 +34,13 @@ logger = logging.getLogger('iaa.tasks.live.hold_center')
 IMAGE_BUDGET_MB = 300        # logs/hold_center 底下所有截圖的上限，超過就從最舊的執行開始刪
 SLOW_FACTOR = 1.5            # 某一步比最近中位數慢幾倍算「慢」
 SLOW_MIN_SAMPLES = 5         # 至少有幾次紀錄才判斷慢不慢
+SLOW_MIN_EXTRA = 3.0         # 而且至少比中位數多這麼多秒才算慢（很短的步驟多 0.7 秒不算）
 NOTIFY_COOLDOWN = 10 * 60    # 同一種異常最多每幾秒通知一次（🔴 不限）
 CHECKPOINT_EVERY = 60        # 每隔幾秒更新一次 summary.txt
 SAMPLE_MAX = 200             # 待判斷區最多幾個樣本
 SAMPLE_SAME_DIFF = 3.0       # 縮圖平均差小於這個值算同一個畫面
 SAMPLE_MAX_CONTEXTS = 3
+UNFINISHED = '未正常結束（程式被關閉或當掉）'
 
 RED, ORANGE, YELLOW, GREEN = 'red', 'orange', 'yellow', 'green'
 _COLORS = {RED: 0xED4245, ORANGE: 0xE67E22, YELLOW: 0xFEE75C, GREEN: 0x57F287}
@@ -77,12 +79,79 @@ def _avg(values: list[float]) -> str:
     return f'{statistics.mean(values):.1f} 秒' if values else '-'
 
 
+def classify_outcome(text: str) -> str | None:
+    """從 OCR 讀到的文字判斷結果；判斷不了回傳 None。"""
+    t = text.upper().replace(' ', '')
+    if 'ALLPERFECT' in t:
+        return 'ALL PERFECT'
+    if 'FULLCOMBO' in t:
+        return 'FULL COMBO'
+    if 'CLEAR' in t:
+        return 'CLEAR'
+    if 'FAIL' in t or 'FINISH' in t:
+        return 'FAILED'
+    return None
+
+
+HISTORY_HEADER = ['開始', '總時間', '輪數', '平均每輪秒數', '平均準備', '平均打歌', '平均結算', 'CLEAR', 'FAILED',
+                  '卡住', '重開', '休息', '誤回主頁', '換歌', '結束原因', '資料夾']
+
+
+def _append_history_row(base: Path, row: list[Any]) -> None:
+    path = base / 'history.csv'
+    new = not path.exists()
+    with open(path, 'a', encoding='utf-8-sig' if new else 'utf-8', newline='') as f:
+        w = csv.writer(f)
+        if new:
+            w.writerow(HISTORY_HEADER)
+        w.writerow(row)
+
+
+def recover_unfinished(base: Path) -> list[str]:
+    """上一次（或更早）沒有正常結束的執行：補寫 history.csv 一行，並把 summary.txt 的結束原因改成「未正常結束」。"""
+    recovered = []
+    if not base.exists():
+        return recovered
+    for d in sorted(p for p in base.iterdir() if p.is_dir() and (p / 'run.log').exists()):
+        summary = d / 'summary.txt'
+        text = summary.read_text(encoding='utf-8') if summary.exists() else ''
+        if text and '結束原因        執行中' not in text:
+            continue
+        rows = []
+        try:
+            with open(d / 'runs.csv', encoding='utf-8-sig') as f:
+                rows = list(csv.DictReader(f))
+        except Exception:  # noqa: BLE001
+            pass
+        secs = [float(r['總秒數']) for r in rows if r.get('總秒數')]
+        col = lambda k: f'{statistics.mean(float(r[k]) for r in rows):.1f}' if rows else ''  # noqa: E731
+        outcomes = [r.get('結果', '') for r in rows]
+        try:
+            started = datetime.strptime(d.name, '%Y-%m-%d_%H%M%S').strftime('%Y-%m-%d %H:%M')
+        except ValueError:
+            started = d.name
+        _append_history_row(base, [started, '', len(rows), f'{statistics.mean(secs):.1f}' if secs else '',
+                                   col('準備秒數'), col('打歌秒數'), col('結算秒數'),
+                                   sum(o in ('CLEAR', 'FULL COMBO', 'ALL PERFECT') for o in outcomes),
+                                   outcomes.count('FAILED'), '', '', '', '', '', UNFINISHED, d.name])
+        note = text.replace('結束原因        執行中', f'結束原因        {UNFINISHED}') if text else \
+            f'長按中央 執行總結\n結束原因        {UNFINISHED}\n完成輪數        {len(rows)}\n'
+        summary.write_text(note, encoding='utf-8')
+        recovered.append(d.name)
+    return recovered
+
+
 # ── 執行記錄 ─────────────────────────────────────────────────────────
 
 
 class RunLog:
     def __init__(self, settings: dict[str, Any], base: Path | None = None) -> None:
         self.base = base or app_root() / 'logs' / 'hold_center'
+        try:
+            self.recovered = recover_unfinished(self.base)
+        except Exception:  # noqa: BLE001
+            logger.exception('Failed to recover unfinished runs.')
+            self.recovered = []
         self.started = datetime.now()
         self.dir = self.base / self.started.strftime('%Y-%m-%d_%H%M%S')
         self.shots = self.dir / 'screenshots'
@@ -90,7 +159,7 @@ class RunLog:
         self.settings = settings
         self._lock = threading.Lock()
         self._run_log = open(self.dir / 'run.log', 'a', encoding='utf-8')
-        self._init_csv('runs.csv', ['輪', '開始', '結束', '總秒數', '準備秒數', '打歌秒數', '結算秒數'])
+        self._init_csv('runs.csv', ['輪', '開始', '結束', '總秒數', '準備秒數', '打歌秒數', '結算秒數', '結果'])
         self._init_csv('steps.csv', ['時間', '輪', '步驟', '秒數', '偏慢', '截圖'])
         self.stats: dict[str, Any] = defaultdict(int)
         self.round_secs: list[float] = []
@@ -102,7 +171,11 @@ class RunLog:
         self._round: dict[str, float] = {}
         self._last_checkpoint = 0.0
         self.finished = False
+        self.outcomes: dict[str, int] = defaultdict(int)
         cleanup_images(self.base, keep=self.dir)
+        for name in self.recovered:
+            self.warn('-', f'上次的執行 {name} 沒有正常結束，已補寫進 history.csv')
+        self.checkpoint(force=True)  # 一開始就留一份總結，被強制關掉也有紀錄
 
     # 基本寫入
 
@@ -151,7 +224,9 @@ class RunLog:
 
     def step(self, name: str, seconds: float, img: np.ndarray | None = None) -> None:
         hist = self.step_hist[name]
-        slow = len(hist) >= SLOW_MIN_SAMPLES and seconds > SLOW_FACTOR * statistics.median(hist[-10:])
+        med = statistics.median(hist[-10:]) if hist else 0.0
+        slow = (len(hist) >= SLOW_MIN_SAMPLES and seconds > SLOW_FACTOR * med
+                and seconds - med >= SLOW_MIN_EXTRA)
         shot = ''
         if slow:
             self.stats['slow_steps'] += 1
@@ -170,6 +245,17 @@ class RunLog:
         """key：play_start（看到 LIFE）、play_end（放開長按）。"""
         self._round.setdefault(key, time.time())
 
+    def set_outcome(self, outcome: str, source: str, override: bool = False) -> None:
+        """記錄這一輪的結果。override=True 時（結算第 1 頁）以新的為準。"""
+        if override or 'outcome' not in self._round:
+            if self._round.get('outcome') != outcome:
+                self.info('结算' if source == '結算第1頁' else '打歌画面', f'結果：{outcome}（從{source}判斷）')
+            self._round['outcome'] = outcome  # type: ignore[assignment]
+
+    @property
+    def outcome(self) -> str | None:
+        return self._round.get('outcome')  # type: ignore[return-value]
+
     def round_end(self) -> float:
         end = time.time()
         r = self._round
@@ -177,6 +263,8 @@ class RunLog:
         ps = r.get('play_start', start)
         pe = r.get('play_end', ps)
         total, prep, play, settle = end - start, ps - start, pe - ps, end - pe
+        outcome = str(r.get('outcome') or '未知')
+        self.outcomes[outcome] += 1
         self.round_secs.append(total)
         self.prep.append(prep)
         self.play.append(play)
@@ -184,10 +272,10 @@ class RunLog:
         self.stats['rounds'] += 1
         self._append_csv('runs.csv', [
             self.round_no, datetime.fromtimestamp(start).strftime('%H:%M:%S'), datetime.fromtimestamp(end).strftime('%H:%M:%S'),
-            f'{total:.1f}', f'{prep:.1f}', f'{play:.1f}', f'{settle:.1f}',
+            f'{total:.1f}', f'{prep:.1f}', f'{play:.1f}', f'{settle:.1f}', outcome,
         ])
         avg = statistics.mean(self.round_secs)
-        self.info('選歌畫面', f'第 {self.round_no} 輪完成：{total:.1f} 秒（準備 {prep:.1f}／打歌 {play:.1f}／結算 {settle:.1f}），平均 {avg:.1f} 秒')
+        self.info('選歌畫面', f'第 {self.round_no} 輪完成（{outcome}）：{total:.1f} 秒（準備 {prep:.1f}／打歌 {play:.1f}／結算 {settle:.1f}），平均 {avg:.1f} 秒')
         self.checkpoint(force=True)
         return total
 
@@ -213,12 +301,15 @@ class RunLog:
             f'  平均準備      {_avg(self.prep)}（編隊畫面 → 開始打歌，含載入）',
             f'  平均打歌      {_avg(self.play)}',
             f'  平均結算      {_avg(self.settle)}（放開長按 → 回到選歌畫面）',
+            f'LIVE CLEAR      {self._clears()}',
+            f'LIVE FAILED     {self.outcomes.get("FAILED", 0)}',
+            f'結果未知        {self.outcomes.get("未知", 0)}',
             '',
             f'卡住            {s["stucks"]}',
             f'重開遊戲        {s["restarts"]}（卡住 {s["stucks"]}／定時 {s["refreshes"]}／休息後 {s["rests"]}）',
             f'休息            {s["rests"]} 次，共 {_fmt(s["rest_seconds"])}',
             f'結算中誤回主頁  {s["home_returns"]}',
-            f'換歌            {s["song_changes"]}',
+            f'換歌            {s["song_changes"]}（自動找回 {s["song_fixes"]} 次）',
             f'偏慢的步驟      {s["slow_steps"]}',
             f'新樣本          {s["new_samples"]}（待判斷區見 learning/inbox）',
             f'略過的通知      {s["notify_skipped"]}',
@@ -229,6 +320,9 @@ class RunLog:
             for name, hist in self.step_hist.items():
                 lines.append(f'  {name:<12}{statistics.mean(hist):6.1f}（{len(hist)} 次，最慢 {max(hist):.1f}）')
         return '\n'.join(lines) + '\n'
+
+    def _clears(self) -> int:
+        return sum(self.outcomes.get(k, 0) for k in ('CLEAR', 'FULL COMBO', 'ALL PERFECT'))
 
     def checkpoint(self, force: bool = False) -> None:
         if self.finished or (not force and time.time() - self._last_checkpoint < CHECKPOINT_EVERY):
@@ -256,19 +350,13 @@ class RunLog:
         return text
 
     def _append_history(self, reason: str) -> None:
-        path = self.base / 'history.csv'
-        new = not path.exists()
-        rs = self.round_secs
-        with open(path, 'a', encoding='utf-8-sig' if new else 'utf-8', newline='') as f:
-            w = csv.writer(f)
-            if new:
-                w.writerow(['開始', '總時間', '輪數', '平均每輪秒數', '平均準備', '平均打歌', '平均結算',
-                            '卡住', '重開', '休息', '誤回主頁', '換歌', '結束原因', '資料夾'])
-            mean = lambda v: f'{statistics.mean(v):.1f}' if v else ''  # noqa: E731
-            s = self.stats
-            w.writerow([f'{self.started:%Y-%m-%d %H:%M}', _fmt((datetime.now() - self.started).total_seconds()),
-                        s['rounds'], mean(rs), mean(self.prep), mean(self.play), mean(self.settle),
-                        s['stucks'], s['restarts'], s['rests'], s['home_returns'], s['song_changes'], reason, self.dir.name])
+        mean = lambda v: f'{statistics.mean(v):.1f}' if v else ''  # noqa: E731
+        s = self.stats
+        _append_history_row(self.base, [
+            f'{self.started:%Y-%m-%d %H:%M}', _fmt((datetime.now() - self.started).total_seconds()),
+            s['rounds'], mean(self.round_secs), mean(self.prep), mean(self.play), mean(self.settle),
+            self._clears(), self.outcomes.get('FAILED', 0),
+            s['stucks'], s['restarts'], s['rests'], s['home_returns'], s['song_changes'], reason, self.dir.name])
 
 
 def cleanup_images(base: Path, keep: Path | None) -> None:
@@ -441,9 +529,10 @@ class StepGuard:
     STATIC_SECONDS = 3.0
     STATIC_DIFF = 4.0
 
-    def __init__(self, run: 'Run', name: str) -> None:
+    def __init__(self, run: 'Run', name: str, wait_seconds: float | None = None) -> None:
         self.run = run
         self.name = name
+        self.wait_seconds = wait_seconds or self.WAIT_SECONDS
         self.start = time.time()
         self._thumb: np.ndarray | None = None
         self._still_since = self.start
@@ -459,7 +548,8 @@ class StepGuard:
         if self._thumb is None or diff(t, self._thumb) >= self.STATIC_DIFF:
             self._still_since = now
         self._thumb = t
-        if (not self._sampled and now - self.start >= self.WAIT_SECONDS
+        self.run.log.checkpoint()
+        if (not self._sampled and now - self.start >= self.wait_seconds
                 and now - self._still_since >= self.STATIC_SECONDS):
             self._sampled = True
             self.run.sample('wait', img, self.name, {'note': f'這一步等了 {now - self.start:.0f} 秒，畫面靜止 {now - self._still_since:.0f} 秒'})
@@ -480,8 +570,8 @@ class Run:
         self.learning = learning or Learning()
         self.prev_step = '-'
 
-    def guard(self, name: str) -> StepGuard:
-        return StepGuard(self, name)
+    def guard(self, name: str, wait_seconds: float | None = None) -> StepGuard:
+        return StepGuard(self, name, wait_seconds)
 
     def sample(self, kind: str, img: np.ndarray | None, step: str, context: dict[str, Any]) -> str | None:
         try:
@@ -514,7 +604,7 @@ class NullRun:
         self.learning = self._Null()
         self.prev_step = '-'
 
-    def guard(self, name: str) -> '_NullGuard':
+    def guard(self, name: str, wait_seconds: float | None = None) -> '_NullGuard':
         return _NullGuard()
 
     def sample(self, *a, **k) -> None:

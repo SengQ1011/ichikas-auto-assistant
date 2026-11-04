@@ -147,5 +147,89 @@ class LearningToolTests(unittest.TestCase):
         tmp.cleanup()
 
 
+class OutcomeTests(unittest.TestCase):
+    def test_classify(self) -> None:
+        self.assertEqual(hl.classify_outcome('LIVE CLEAR'), 'CLEAR')
+        self.assertEqual(hl.classify_outcome('live  failed'), 'FAILED')
+        self.assertEqual(hl.classify_outcome('LIVE FINISH'), 'FAILED')
+        self.assertEqual(hl.classify_outcome('FULL COMBO'), 'FULL COMBO')
+        self.assertEqual(hl.classify_outcome('ALL PERFECT'), 'ALL PERFECT')
+        self.assertIsNone(hl.classify_outcome('SCORE'))
+
+    def test_outcome_recorded_and_counted(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        base = Path(tmp.name)
+        log = hl.RunLog({}, base=base)
+        self.assertTrue((log.dir / 'summary.txt').exists())  # 一開始就有總結
+        log.round_begin(1)
+        log.set_outcome('CLEAR', '打歌結束畫面')
+        log.set_outcome('FAILED', '結算第1頁', override=True)  # 結算第 1 頁為準
+        log.round_end()
+        log.round_begin(2)
+        log.round_end()  # 讀不到 → 未知
+        text = log.finish('時間到')
+        self.assertIn('LIVE FAILED     1', text)
+        self.assertIn('結果未知        1', text)
+        with open(log.dir / 'runs.csv', encoding='utf-8-sig') as f:
+            rows = list(csv.DictReader(f))
+        self.assertEqual([r['結果'] for r in rows], ['FAILED', '未知'])
+        with open(base / 'history.csv', encoding='utf-8-sig') as f:
+            hist = list(csv.DictReader(f))
+        self.assertEqual((hist[0]['CLEAR'], hist[0]['FAILED']), ('0', '1'))
+        tmp.cleanup()
+
+
+class RecoverTests(unittest.TestCase):
+    def test_unfinished_run_is_added_to_history_once(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        base = Path(tmp.name)
+        old = base / '2026-11-04_001947'
+        old.mkdir(parents=True)
+        (old / 'run.log').write_text('x', encoding='utf-8')
+        with open(old / 'runs.csv', 'w', encoding='utf-8-sig', newline='') as f:
+            w = csv.writer(f)
+            w.writerow(['輪', '開始', '結束', '總秒數', '準備秒數', '打歌秒數', '結算秒數', '結果'])
+            w.writerow([1, '00:20', '00:22', '120.0', '20.0', '85.0', '15.0', 'FAILED'])
+        log = hl.RunLog({}, base=base)
+        self.assertEqual(log.recovered, ['2026-11-04_001947'])
+        self.assertIn(hl.UNFINISHED, (old / 'summary.txt').read_text(encoding='utf-8'))
+        log.finish('時間到')
+        log2 = hl.RunLog({}, base=base)  # 第二次啟動不重複補寫
+        self.assertEqual(log2.recovered, [])
+        log2.finish('時間到')
+        with open(base / 'history.csv', encoding='utf-8-sig') as f:
+            hist = list(csv.DictReader(f))
+        self.assertEqual([h['結束原因'] for h in hist], [hl.UNFINISHED, '時間到', '時間到'])
+        self.assertEqual(hist[0]['FAILED'], '1')
+        tmp.cleanup()
+
+
+class LoadingThresholdTests(unittest.TestCase):
+    def test_loading_guard_waits_longer(self) -> None:
+        run = mock.Mock()
+        clock = iter([0.0, 0.0, 5.0, 11.0, 12.0, 46.0])
+        with mock.patch.object(hl.time, 'time', side_effect=lambda: next(clock)):
+            g = hl.StepGuard(run, '開始→打歌畫面', wait_seconds=45)
+            for _ in range(4):
+                g.tick(_img(40))
+            run.sample.assert_not_called()  # 載入中靜止十幾秒是正常的
+            g.tick(_img(40))
+        run.sample.assert_called_once()
+
+
+class SlowThresholdTests(unittest.TestCase):
+    def test_short_step_needs_three_more_seconds(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        log = hl.RunLog({}, base=Path(tmp.name))
+        for _ in range(hl.SLOW_MIN_SAMPLES):
+            log.step('選歌→編隊', 1.0)
+        log.step('選歌→編隊', 1.9)      # 1.9 倍但只多 0.9 秒：不算
+        self.assertEqual(log.stats['slow_steps'], 0)
+        log.step('選歌→編隊', 5.9)      # 多 4.9 秒：算
+        self.assertEqual(log.stats['slow_steps'], 1)
+        log.finish('test')
+        tmp.cleanup()
+
+
 if __name__ == '__main__':
     unittest.main()

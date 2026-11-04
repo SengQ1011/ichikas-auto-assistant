@@ -108,7 +108,7 @@ class _LoopReporter(_FakeReporter):
 @mock.patch.object(hold_center, '_make_run', side_effect=lambda _s: NullRun())
 @mock.patch.object(hold_center, 'task_reporter', return_value=_LoopReporter())
 @mock.patch.object(hold_center, 'tstr', side_effect=lambda k: k)
-@mock.patch.object(hold_center, '_SongWatcher')
+@mock.patch.object(hold_center, '_SongGuard')
 @mock.patch.object(hold_center, '_turn_off_game_auto')
 @mock.patch.object(hold_center, '_click_start')
 @mock.patch.object(hold_center, '_play_holding')
@@ -147,7 +147,7 @@ class StuckRecoveryTests(unittest.TestCase):
 @mock.patch.object(hold_center, '_make_run', side_effect=lambda _s: NullRun())
 @mock.patch.object(hold_center, 'task_reporter', return_value=_LoopReporter())
 @mock.patch.object(hold_center, 'tstr', side_effect=lambda k: k)
-@mock.patch.object(hold_center, '_SongWatcher')
+@mock.patch.object(hold_center, '_SongGuard')
 @mock.patch.object(hold_center, '_turn_off_game_auto')
 @mock.patch.object(hold_center, '_click_start')
 @mock.patch.object(hold_center, '_play_holding')
@@ -209,7 +209,7 @@ class RealLogIntegrationTests(unittest.TestCase):
             return holder['run']
 
         patches = [mock.patch.object(hold_center, name) for name in (
-            '_SongWatcher', '_turn_off_game_auto', '_click_start', '_play_holding',
+            '_SongGuard', '_turn_off_game_auto', '_click_start', '_play_holding',
             '_settle_to_song_select', 'ensure_zero_fire', '_restart_game')]
         for p in patches:
             p.start()
@@ -232,6 +232,237 @@ class RealLogIntegrationTests(unittest.TestCase):
         self.assertIn('| 编队画面 | 卡住：test', run_log)
         self.assertIsInstance(hold_center._run, NullRun)  # 结束后复原
         tmp.cleanup()
+
+
+class ReadOutcomeTests(unittest.TestCase):
+    def test_read_outcome_records_and_screenshots_first_two(self) -> None:
+        log = mock.MagicMock()
+        log.stats = {'outcome_shots': 0}
+        run = mock.Mock(log=log)
+        results = [mock.Mock(text='LIVE'), mock.Mock(text='FAILED')]
+        with mock.patch.object(hold_center, '_run', run), \
+                mock.patch.object(hold_center, 'ocr', mock.Mock(**{'ocr.return_value': results})), \
+                mock.patch.object(hold_center, '_frame', return_value=None):
+            self.assertEqual(hold_center._read_outcome(hold_center.END_BANNER_BOX, '打歌結束畫面'), 'FAILED')
+            hold_center._read_outcome(hold_center.END_BANNER_BOX, '打歌結束畫面')
+            hold_center._read_outcome(hold_center.END_BANNER_BOX, '打歌結束畫面')
+        self.assertEqual(log.shot.call_count, hold_center.OUTCOME_SHOTS)
+        log.set_outcome.assert_called_with('FAILED', '打歌結束畫面', False)
+
+    def test_unreadable_returns_none(self) -> None:
+        with mock.patch.object(hold_center, 'ocr', mock.Mock(**{'ocr.return_value': [mock.Mock(text='...')]})):
+            self.assertIsNone(hold_center._read_outcome(hold_center.RESULT1_BOX, '結算第1頁', override=True))
+
+
+def _frame_img(value: int):
+    import numpy as np
+    img = np.zeros((90, 160, 3), np.uint8)
+    img[:, : value % 160] = 255
+    return img
+
+
+class TapRuleTests(unittest.TestCase):
+    def test_once_then_retap_only_after_delay_and_static(self) -> None:
+        taps = hold_center._Taps()
+        taps.frame(_frame_img(10))
+        self.assertTrue(taps.allow('next')[0])
+        taps.done('next')
+        taps.frame(_frame_img(10))
+        self.assertFalse(taps.allow('next')[0])          # 剛點完
+        taps.at -= 2
+        taps.frame(_frame_img(60))                       # 畫面還在動
+        self.assertFalse(taps.allow('next')[0])
+        taps.frame(_frame_img(60))                       # 靜止了
+        ok, note = taps.allow('next')
+        self.assertTrue(ok)
+        self.assertIn('同類畫面已換成下一個', note)        # 跟點的時候比已經換了
+
+    def test_retap_label_when_screen_unchanged(self) -> None:
+        taps = hold_center._Taps()
+        taps.frame(_frame_img(10))
+        taps.done('next')
+        taps.at -= 2
+        taps.frame(_frame_img(10))
+        ok, note = taps.allow('next')
+        self.assertTrue(ok)
+        self.assertIn('補點', note)
+
+    def test_go_song_clicks_left_end_and_waits_three_seconds(self) -> None:
+        taps = hold_center._Taps()
+        taps.frame(_frame_img(10))
+        obj = mock.Mock()
+        obj.rect.center = (915, 666)
+        prefab = mock.Mock(**{'find.return_value': obj})
+        dev = mock.Mock()
+        with mock.patch.object(hold_center, 'device', new=dev):
+            hold_center._click(taps, 'go_song', '结算', prefab, 'x', offset=hold_center.GO_SONG_OFFSET,
+                               retap_after=hold_center.GO_SONG_RETAP_AFTER, on_change=False)
+            dev.click.assert_called_once_with(845, 670)
+            taps.at -= 2                                  # 2 秒後、畫面大變：還是不補點
+            taps.frame(_frame_img(150))
+            taps.frame(_frame_img(150))
+            hold_center._click(taps, 'go_song', '结算', prefab, 'x', offset=hold_center.GO_SONG_OFFSET,
+                               retap_after=hold_center.GO_SONG_RETAP_AFTER, on_change=False)
+            self.assertEqual(dev.click.call_count, 1)
+
+
+class SongGuardTests(unittest.TestCase):
+    def _guard(self, names, jacket_scores):
+        g = hold_center._SongGuard(None)
+        names = iter(names)
+        scores = iter(jacket_scores)
+        patches = [
+            mock.patch.object(hold_center, 'device', new=mock.Mock(**{'screenshot.return_value': _frame_img(50)})),
+            mock.patch.object(hold_center._SongGuard, '_read_name', staticmethod(lambda: next(names))),
+            mock.patch.object(hold_center.cv2, 'minMaxLoc', side_effect=lambda _m: (0, next(scores), 0, 0)),
+            mock.patch.object(hold_center, '_crop', return_value=_frame_img(50)),
+        ]
+        return g, patches
+
+    def _run_checks(self, names, scores, n):
+        g, patches = self._guard(names, scores)
+        for p in patches:
+            p.start()
+        try:
+            return g, [g.check() for _ in range(n)]
+        finally:
+            for p in patches:
+                p.stop()
+
+    def test_both_jacket_and_name_must_differ(self) -> None:
+        g, results = self._run_checks(['独りんぼエンヴィー', '独りんぼエンヴィー', 'ファイアダンス', None],
+                                      [0.3, 0.3, 0.3], 4)
+        self.assertEqual(results, [True, True, False, False])   # 同名不算；讀不到歌名只看封面
+        self.assertEqual(g.target, '独りんぼエンヴィー')         # 固定歌曲：用第 1 輪讀到的名字
+
+    def test_jacket_same_is_same(self) -> None:
+        _, results = self._run_checks(['A曲', 'B曲'], [0.95], 2)
+        self.assertEqual(results, [True, True])
+
+    def test_specified_name_is_target(self) -> None:
+        self.assertEqual(hold_center._SongGuard('メルト').target, 'メルト')
+
+
+class _FakeSong:
+    def __init__(self, results, ref_name='独りんぼエンヴィー', song_name=None):
+        self.results = iter(results)
+        self.ref_name = ref_name
+        self.song_name = song_name
+        self.last = (0.3, 'ファイアダンス', None)
+
+    @property
+    def target(self):
+        return self.song_name or self.ref_name
+
+    def check(self):
+        return next(self.results, True)
+
+
+@mock.patch.object(hold_center, '_make_run', side_effect=lambda _s: NullRun())
+@mock.patch.object(hold_center, 'task_reporter', return_value=_LoopReporter())
+@mock.patch.object(hold_center, 'tstr', side_effect=lambda k: k)
+@mock.patch.object(hold_center, '_turn_off_game_auto')
+@mock.patch.object(hold_center, '_click_start')
+@mock.patch.object(hold_center, '_play_holding')
+@mock.patch.object(hold_center, '_settle_to_song_select')
+@mock.patch.object(hold_center, '_go_unit_select')
+@mock.patch.object(hold_center, 'ensure_zero_fire')
+@mock.patch.object(hold_center, '_close_game')
+@mock.patch.object(hold_center, '_restart_game')
+class SongRecoveryTests(unittest.TestCase):
+    def test_fixed_song_recovered_by_ocr_name(self, restart, close, zero, *_mocks) -> None:
+        song = _FakeSong([True, False, True])            # 第 2 輪前換歌，找回後正常
+        with mock.patch.object(hold_center, '_SongGuard', return_value=song):
+            hold_center.hold_center_loop(2, None, None)
+        restart.assert_called_once()
+        self.assertEqual(restart.call_args[0][:2], ('specified', '独りんぼエンヴィー'))
+        self.assertEqual(zero.call_count, 2)               # 重開後重新確認 0 火
+        close.assert_not_called()
+
+    def test_stops_and_closes_game_after_two_failed_fixes(self, restart, close, *_mocks) -> None:
+        song = _FakeSong([True, False, False, False], song_name='メルト')
+        with mock.patch.object(hold_center, '_SongGuard', return_value=song):
+            with self.assertRaises(hold_center.HoldCenterStop):
+                hold_center.hold_center_loop(5, None, None, song_select_mode='specified', song_name='メルト')
+        self.assertEqual(restart.call_count, hold_center.SONG_FIX_TRIES)
+        self.assertEqual(restart.call_args[0][:2], ('specified', 'メルト'))
+        close.assert_called_once()
+
+    def test_unreadable_reference_name_stops_immediately(self, restart, close, *_mocks) -> None:
+        song = _FakeSong([True, False], ref_name=None)
+        with mock.patch.object(hold_center, '_SongGuard', return_value=song):
+            with self.assertRaises(hold_center.HoldCenterStop):
+                hold_center.hold_center_loop(5, None, None)
+        restart.assert_not_called()
+        close.assert_called_once()
+
+    def test_manual_stop_does_not_close_game(self, restart, close, zero, settle, *_mocks) -> None:
+        settle.side_effect = KeyboardInterrupt('User requested interrupt.')
+        with mock.patch.object(hold_center, '_SongGuard', return_value=_FakeSong([])):
+            with self.assertRaises(KeyboardInterrupt):
+                hold_center.hold_center_loop(5, None, None)
+        close.assert_not_called()
+
+    def test_unexpected_error_closes_game(self, restart, close, zero, settle, *_mocks) -> None:
+        settle.side_effect = RuntimeError('boom')
+        with mock.patch.object(hold_center, '_SongGuard', return_value=_FakeSong([])):
+            with self.assertRaises(RuntimeError):
+                hold_center.hold_center_loop(5, None, None)
+        close.assert_called_once()
+
+
+class HoldGuardTests(unittest.TestCase):
+    """用假的裝置與時鐘跑一整首：LIFE 出現 10 秒後結束。"""
+
+    def _play(self, show_touches_before='0'):
+        clock = {'t': 0.0}
+        dev = mock.Mock()
+        dev.scaler.logic_to_physical.side_effect = lambda xy: (xy[0] * 1.25, xy[1] * 1.25)
+        frames = iter(range(1000))
+        dev.screenshot.side_effect = lambda: _frame_img(next(frames) * 7)   # 畫面一直在動，不會被當成凍結
+        shell = dev.of_android.return_value.commands.adb_shell
+        shell.side_effect = lambda cmd: show_touches_before if cmd.startswith('settings get') else ''
+        life = mock.Mock()
+        life.exists.side_effect = lambda: clock['t'] < 10.0
+        R = mock.MagicMock()
+        R.Live.TextLife = life
+        R.Live.TextScoreRank.exists.side_effect = lambda: clock['t'] >= 10.5
+
+        def loop(interval=0.5):
+            while True:
+                yield None
+                clock['t'] += interval
+
+        with mock.patch.object(hold_center, 'device', new=dev), \
+                mock.patch.object(hold_center, 'R', new=R), \
+                mock.patch.object(hold_center, 'Loop', side_effect=loop), \
+                mock.patch.object(hold_center, 'sleep'), \
+                mock.patch.object(hold_center, '_frame', return_value=None), \
+                mock.patch.object(hold_center, '_read_outcome'), \
+                mock.patch.object(hold_center, 'task_reporter', return_value=_FakeReporter()), \
+                mock.patch.object(hold_center.time, 'time', side_effect=lambda: clock['t']):
+            hold_center._play_holding()
+        return dev, shell
+
+    def test_contact_one_repress_every_three_seconds_and_release(self) -> None:
+        dev, _ = self._play()
+        downs = dev.multi_touch.multi_touch_down.call_args_list
+        ups = dev.multi_touch.multi_touch_up.call_args_list
+        self.assertTrue(all(c.args == (800, 712, 1) for c in downs))   # 第 1 號手指、換算成實際座標
+        self.assertEqual(len(downs), 1 + 3)                             # 第 0 秒按下，3、6、9 秒重新按
+        self.assertEqual(len(ups), 3 + 1)                               # 重新按 3 次 + 最後放開
+
+    def test_show_touches_turned_on_then_restored(self) -> None:
+        _, shell = self._play('0')
+        cmds = [c.args[0] for c in shell.call_args_list]
+        self.assertIn('settings put system show_touches 1', cmds)
+        self.assertEqual(cmds[-1], 'settings put system show_touches 0')
+        self.assertIsNone(hold_center._touches_prev)
+
+    def test_show_touches_left_alone_if_already_on(self) -> None:
+        _, shell = self._play('1')
+        cmds = [c.args[0] for c in shell.call_args_list]
+        self.assertFalse(any(c.startswith('settings put') for c in cmds))
 
 
 if __name__ == '__main__':
