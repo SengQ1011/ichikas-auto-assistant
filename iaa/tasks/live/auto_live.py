@@ -19,6 +19,11 @@ def auto_live(plan: SingleLoopPlan | ListLoopPlan) -> None:
         raise ValueError('hold_center only supports single-song loop.')
 
     reporter.message(TStr(zh_CN='返回首页准备进入演出', en_US='Returning home before live'))
-    go_home()
+    # 游戏没开时自动启动（单独运行自动演出时不会经过「启动游戏」任务）
+    if isinstance(plan, SingleLoopPlan) and plan.play_mode == 'hold_center':
+        from .hold_center import go_home_before_start
+        go_home_before_start()  # 同上，另外超过 3 分钟还没到首页就停止
+    else:
+        go_home(check_alive=True)
     reporter.message(TStr(zh_CN='进入自动演出流程', en_US='Starting auto live flow'))
     do_solo_live(plan)

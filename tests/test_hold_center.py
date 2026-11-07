@@ -575,3 +575,57 @@ class SettleOutcomeRetryTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class GoHomeGuardTests(unittest.TestCase):
+    def _fake_go_home(self, clock: list[float], arrive_after: float | None):
+        def go_home(*, check_alive: bool = False, extra_callback=None):
+            self.assertTrue(check_alive)
+            while arrive_after is None or clock[0] < arrive_after:
+                extra_callback()
+                clock[0] += 0.5
+        return go_home
+
+    def test_arrives_in_time(self) -> None:
+        clock = [0.0]
+        with mock.patch('iaa.tasks.common.go_home', self._fake_go_home(clock, 60)), \
+                mock.patch.object(hold_center.time, 'time', side_effect=lambda: clock[0]):
+            hold_center._go_home_or_stop()
+
+    def test_stops_after_timeout(self) -> None:
+        clock = [0.0]
+        with mock.patch('iaa.tasks.common.go_home', self._fake_go_home(clock, None)), \
+                mock.patch.object(hold_center.time, 'time', side_effect=lambda: clock[0]):
+            with self.assertRaises(hold_center.HoldCenterStop):
+                hold_center._go_home_or_stop()
+        self.assertGreater(clock[0], hold_center.HOME_TIMEOUT)
+
+    def test_before_start_reports_and_closes(self) -> None:
+        with mock.patch.object(hold_center, '_go_home_or_stop', side_effect=hold_center.HoldCenterStop('x')), \
+                mock.patch.object(hold_center, '_make_run', return_value=NullRun()), \
+                mock.patch.object(hold_center, '_stop_and_close') as stop:
+            with self.assertRaises(hold_center.HoldCenterStop):
+                hold_center.go_home_before_start()
+        stop.assert_called_once()
+
+
+class AutoLiveStartTests(unittest.TestCase):
+    def _run(self, plan) -> tuple[mock.Mock, mock.Mock]:
+        from iaa.tasks.live import auto_live as mod
+        with mock.patch.object(mod, 'task_reporter', return_value=_FakeReporter()), \
+                mock.patch.object(mod, 'do_solo_live'), \
+                mock.patch.object(mod, 'go_home') as go_home, \
+                mock.patch.object(hold_center, 'go_home_before_start') as guarded:
+            fn = getattr(mod.auto_live, '__wrapped__', mod.auto_live)
+            fn(plan)
+        return go_home, guarded
+
+    def test_other_modes_launch_game(self) -> None:
+        go_home, guarded = self._run(SingleLoopPlan(loop_count=1, play_mode='game_auto'))
+        go_home.assert_called_once_with(check_alive=True)
+        guarded.assert_not_called()
+
+    def test_hold_center_uses_guard(self) -> None:
+        go_home, guarded = self._run(SingleLoopPlan(loop_count=1, play_mode='hold_center', ap_multiplier=0))
+        go_home.assert_not_called()
+        guarded.assert_called_once()

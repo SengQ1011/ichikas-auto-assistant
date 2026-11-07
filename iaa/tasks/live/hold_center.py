@@ -587,10 +587,39 @@ def _close_game() -> None:
     device.of_android().commands.adb_shell(f'am force-stop {package_name()}')
 
 
+# 回首页的时间上限（秒）。超过就截图、🔴 通知、关闭游戏并停止，避免无限点画面左边缘。
+HOME_TIMEOUT = 180
+
+
+def _go_home_or_stop() -> None:
+    """回首页；游戏不在前景时会自动启动。超过 HOME_TIMEOUT 秒还没到首页就抛 HoldCenterStop。"""
+    from ..common import go_home
+    started = time.time()
+
+    def guard() -> None:
+        if time.time() - started > HOME_TIMEOUT:
+            raise HoldCenterStop(f'回首頁超過 {HOME_TIMEOUT // 60} 分鐘還沒到')
+
+    go_home(check_alive=True, extra_callback=guard)
+
+
+def go_home_before_start() -> None:
+    """长按中央开始前回首页（由 auto_live 调用）。
+
+    这时还没有这一次的记录，所以失败时才建立一份，用来截图、🔴 通知和关闭游戏。
+    """
+    try:
+        _go_home_or_stop()
+    except HoldCenterStop as e:
+        run = _make_run({'階段': '開始前回首頁'})
+        _stop_and_close(run, str(e))
+        run.log.finish(f'停止：{e}')
+        raise
+
+
 def _restart_game(song_select_mode: str, song_name: str | None, why: TStr | None = None) -> None:
     """关闭游戏重开，回到首页后重新进入选歌，结束时位于编队画面。"""
     from iaa.definitions.consts import package_name
-    from ..common import go_home
     from .live import _prepare_solo_live
     rep = task_reporter()
     rep.message(why or TStr(zh_CN='卡住了，关闭游戏重开', en_US='Stuck, restarting the game'))
@@ -601,7 +630,7 @@ def _restart_game(song_select_mode: str, song_name: str | None, why: TStr | None
     _close_game()
     sleep(2)
     d.launch_app(pkg)
-    go_home(check_alive=True)
+    _go_home_or_stop()
     _prepare_solo_live(song_select_mode, song_name)
     _run.log.stats['restarts'] += 1
     _run.log.info('重開', f'重開完成，花了 {time.time() - started:.0f} 秒，回到編隊畫面')
