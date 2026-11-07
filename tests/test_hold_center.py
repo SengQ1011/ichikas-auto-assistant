@@ -600,6 +600,7 @@ class SettleUnknownScreenTests(unittest.TestCase):
                 mock.patch.object(hold_center, '_frame', return_value=None), \
                 mock.patch.object(hold_center, '_side_tap', new=side), \
                 mock.patch.object(hold_center, 'server', return_value='jp'), \
+                mock.patch.object(hold_center, '_ocr_unknown_screen', return_value=(None, None, '')), \
                 mock.patch.object(hold_center.time, 'time', side_effect=lambda: clock[0]), \
                 mock.patch.object(hold_center, 'task_reporter', return_value=_FakeReporter()):
             hold_center._settle_to_song_select()   # 10 秒：3 秒後開始，每 2 秒一次 → 3、5、7、9 秒
@@ -649,6 +650,74 @@ class SettleBondLevelUpTests(unittest.TestCase):
     def test_other_servers_skip_template(self) -> None:
         R, _, _ = self._run('jp')
         R.Live.TextBondLevelUp.exists.assert_not_called()      # 沒有 jp/cn/en 模板，不能呼叫
+
+
+def _ocr_result(text, x1, y1, x2, y2):
+    r = mock.Mock()
+    r.text = text
+    r.rect.center.x = (x1 + x2) // 2
+    r.rect.center.y = (y1 + y2) // 2
+    return r
+
+
+class OcrUnknownScreenTests(unittest.TestCase):
+    def _read(self, results):
+        fake = mock.Mock(**{'ocr.return_value': results})
+        with mock.patch.object(hold_center, 'ocr', new=fake):
+            return hold_center._ocr_unknown_screen()
+
+    def test_next_text_tapped_at_its_center(self) -> None:
+        kind, xy, _ = self._read([_ocr_result('達成報酬', 820, 650, 1000, 690), _ocr_result('下一 頁', 1080, 650, 1180, 690)])
+        self.assertEqual(kind, 'tap_text')
+        self.assertEqual(xy, (1130, 670))
+
+    def test_bond_popup_side_skip(self) -> None:
+        kind, _, text = self._read([_ocr_result('情誼等級UP!', 455, 222, 815, 292)])
+        self.assertEqual((kind, text), ('side_skip', '情誼等級UP!'))
+
+    def test_no_keyword_returns_summary(self) -> None:
+        kind, _, text = self._read([_ocr_result('OK', 600, 600, 680, 640)])
+        self.assertIsNone(kind)
+        self.assertEqual(text, 'OK')                       # 不點 OK，留給盲點
+
+    def test_ocr_failure_is_ignored(self) -> None:
+        fake = mock.Mock(**{'ocr.side_effect': RuntimeError('boom')})
+        with mock.patch.object(hold_center, 'ocr', new=fake):
+            self.assertEqual(hold_center._ocr_unknown_screen(), (None, None, ''))
+
+
+class SettleOcrLimitTests(unittest.TestCase):
+    def test_ocr_keyword_used_at_most_twice_then_blind(self) -> None:
+        R = mock.MagicMock()
+        R.Live.TextScoreRank.exists.return_value = False
+        R.Live.ButtonLiveCompletedNext.find.return_value = None
+        R.Live.ButtonGoSongSelect.find.return_value = None
+        R.Live.TextScoreRankReward.exists.return_value = False
+        R.Live.TextLevelUpBouns.exists.return_value = False
+        R.Cm.TextAwardClaimed.exists.return_value = False
+        clock = [0.0]
+
+        def loop(*a, **k):
+            for i in range(20):
+                yield i
+                clock[0] += 0.5
+        dev, side = mock.Mock(), mock.Mock()
+        read = mock.Mock(return_value=('side_skip', None, '升級'))
+        with mock.patch.object(hold_center, 'R', new=R), \
+                mock.patch.object(hold_center, 'device', new=dev), \
+                mock.patch.object(hold_center, 'Loop', side_effect=loop), \
+                mock.patch.object(hold_center, 'at_song_select', return_value=False), \
+                mock.patch.object(hold_center, 'at_home', return_value=False), \
+                mock.patch.object(hold_center, '_frame', return_value=None), \
+                mock.patch.object(hold_center, '_side_tap', new=side), \
+                mock.patch.object(hold_center, 'server', return_value='jp'), \
+                mock.patch.object(hold_center, '_ocr_unknown_screen', new=read), \
+                mock.patch.object(hold_center.time, 'time', side_effect=lambda: clock[0]), \
+                mock.patch.object(hold_center, 'task_reporter', return_value=_FakeReporter()):
+            hold_center._settle_to_song_select()   # 3、5、7、9 秒各觸發一次
+        self.assertEqual(read.call_count, 2)                     # OCR 只用 2 次
+        self.assertEqual(side.call_count, 3)                     # 2 次 OCR 跳過 + 第 1 次盲點（左側）
+        dev.click.assert_called_once_with(*hold_center.RESULT_NEXT_XY)  # 第 2 次盲點（下一頁）
 
 
 class GoUnitSelectGraceTests(unittest.TestCase):

@@ -104,6 +104,14 @@ MAX_SETTLE_SECONDS = 90
 UNKNOWN_TAP_AFTER = 3.0
 UNKNOWN_TAP_EVERY = 2.0
 RESULT_NEXT_XY = (1129, 665)
+# 认不出的画面先用 OCR 找关键字；可在此处增删关键字（繁简都写）。
+# 「点文字」：点 OCR 读到的那段文字的中央（例如按下后发光、模板认不出的「下一页」）。
+OCR_TAP_TEXT_KEYWORDS = ('下一頁', '下一页')
+# 「点左侧空白跳过」：各种升级／获得奖励的彈窗。不要放「OK」，结算中点 OK 会回首页。
+# 关键字要够独特：结算页本身就有的字（例如「距离解锁还剩」）会让正常页面被当成彈窗。
+OCR_SIDE_SKIP_KEYWORDS = ('情誼', '情谊', '等級UP', '等级UP', '升級', '升级', '獲得', '获得', 'RANKUP', 'LEVELUP')
+# 同一段认不出的期间，OCR 关键字最多点几次；之后改回盲点（避免关键字误判时一直点同一个地方）
+OCR_MAX_TAPS = 2
 # 进入编队画面时，前一步（启动／重开后的选歌流程）可能已经按过「决定」：
 # 先等这么多秒看会不会自己进入编队画面，避免再点一次「决定」点到编队画面的「开始」。
 DECIDE_GRACE_SECONDS = 3.0
@@ -550,6 +558,7 @@ def _settle_to_song_select() -> None:
     known_at = started        # 最后一次认出画面的时间
     unknown_at = 0.0          # 最后一次后备点击的时间
     unknown_count = 0
+    ocr_taps = 0              # 这段认不出的期间已经依 OCR 关键字点了几次
     next_xy = RESULT_NEXT_XY  # 「下一页」最后看到的位置
     for _ in Loop(interval=0.4):
         img = _frame()
@@ -601,8 +610,21 @@ def _settle_to_song_select() -> None:
             now = time.time()
             if now - known_at >= UNKNOWN_TAP_AFTER and now - unknown_at >= UNKNOWN_TAP_EVERY and not taps.moving:
                 unknown_at = now
-                unknown_count += 1
                 taps.key = None  # 之后再看到已知按钮时当成新画面，马上可以点
+                kind, xy, text = _ocr_unknown_screen() if ocr_taps < OCR_MAX_TAPS else (None, None, '')
+                if kind:
+                    ocr_taps += 1
+                if kind == 'tap_text':
+                    device.click(int(xy[0]), int(xy[1]))
+                    _run.log.tap('结算', xy, f'認不出的畫面，OCR 讀到「{text}」，點這段文字')
+                    continue
+                if kind == 'side_skip':
+                    _side_tap()
+                    _run.log.tap('结算', None, f'認不出的畫面，OCR 讀到「{text}」，點左側空白跳過')
+                    continue
+                unknown_count += 1
+                if text:
+                    _run.log.info('结算', f'認不出的畫面，OCR 讀到「{text}」但沒有符合的關鍵字（可加進 OCR_*_KEYWORDS）')
                 if unknown_count % 2 == 1:
                     _side_tap()
                     _run.log.tap('结算', None, f'認不出的畫面，點左側空白（第 {unknown_count} 次，{now - known_at:.0f} 秒沒認出畫面）')
@@ -611,6 +633,29 @@ def _settle_to_song_select() -> None:
                     _run.log.tap('结算', next_xy, f'認不出的畫面，點「下一頁」的位置（第 {unknown_count} 次，{now - known_at:.0f} 秒沒認出畫面）')
             continue
         known_at = time.time()
+        ocr_taps = 0
+
+
+def _ocr_unknown_screen() -> tuple[str | None, tuple[int, int] | None, str]:
+    """认不出的画面：OCR 整个画面找关键字。
+
+    回传 (动作, 坐标, 读到的文字摘要)；动作是 'tap_text'、'side_skip' 或 None（没有符合的关键字／OCR 失败）。
+    """
+    try:
+        results = list(ocr.ocr())
+    except Exception:  # noqa: BLE001
+        logger.exception('Failed to OCR unknown settle screen.')
+        return None, None, ''
+    texts = [(r, r.text.replace(' ', '').upper()) for r in results]
+    summary = '／'.join(t for _, t in texts if t)[:60]
+    for r, t in texts:
+        if any(k.upper() in t for k in OCR_TAP_TEXT_KEYWORDS):
+            c = r.rect.center
+            return 'tap_text', (int(c.x), int(c.y)), r.text
+    for r, t in texts:
+        if any(k.upper() in t for k in OCR_SIDE_SKIP_KEYWORDS):
+            return 'side_skip', None, r.text
+    return None, None, summary
 
 
 def _side_tap() -> None:
