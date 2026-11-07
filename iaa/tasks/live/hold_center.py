@@ -104,6 +104,9 @@ MAX_SETTLE_SECONDS = 90
 UNKNOWN_TAP_AFTER = 3.0
 UNKNOWN_TAP_EVERY = 2.0
 RESULT_NEXT_XY = (1129, 665)
+# 进入编队画面时，前一步（启动／重开后的选歌流程）可能已经按过「决定」：
+# 先等这么多秒看会不会自己进入编队画面，避免再点一次「决定」点到编队画面的「开始」。
+DECIDE_GRACE_SECONDS = 3.0
 
 # 正在执行的这一次的记录（不在执行时是什么都不做的 NullRun）
 _run: 'Run | NullRun' = NullRun()
@@ -421,8 +424,11 @@ def _at_unit_select() -> bool:
     return AnyOf[R.Live.SwitchAutoLiveOff, R.Live.SwitchAutoLiveOn].find() is not None
 
 
-def _go_unit_select() -> None:
-    """选歌画面 → 编队画面（已在编队画面就直接返回）。"""
+def _go_unit_select(grace: float = 0.0) -> None:
+    """选歌画面 → 编队画面（已在编队画面就直接返回）。
+
+    :param grace: 前 grace 秒只等、不点「决定」（前一步可能已经按过，正在切换画面）。
+    """
     guard = _run.guard('選歌→編隊')
     taps = _Taps()
     started = time.time()
@@ -434,9 +440,12 @@ def _go_unit_select() -> None:
         if _at_unit_select():
             guard.done()
             return
+        if time.time() - started < grace:
+            continue
         if btn := at_song_select():
+            # 补点至少隔 3 秒：点完到画面切走之间「决定」还看得到，太快补点会点到编队画面的「开始」
             _tap_xy(taps, 'song_decide', '选歌画面', _center(btn), '決定（進入編隊畫面）',
-                    action=lambda: device.click(btn))
+                    retap_after=GO_SONG_RETAP_AFTER, on_change=False, action=lambda: device.click(btn))
 
 
 def _turn_off_game_auto() -> None:
@@ -861,7 +870,8 @@ def _loop(rep, deadline, loop_count, auto_set_unit, song_select_mode, song_name,
     with rep.phase(tstr('progress.phase.single_loop'), total=total) as phase:
         while True:
             try:
-                _go_unit_select()
+                # 刚启动／重开／休息后（还没确认 0 火）：选歌流程已经按过「决定」，先等它进编队画面
+                _go_unit_select(grace=0.0 if zero_checked else DECIDE_GRACE_SECONDS)
                 if not zero_checked:
                     ensure_zero_fire()
                     zero_checked = True

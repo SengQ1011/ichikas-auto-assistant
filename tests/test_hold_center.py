@@ -651,6 +651,37 @@ class SettleBondLevelUpTests(unittest.TestCase):
         R.Live.TextBondLevelUp.exists.assert_not_called()      # 沒有 jp/cn/en 模板，不能呼叫
 
 
+class GoUnitSelectGraceTests(unittest.TestCase):
+    """剛啟動／重開時選歌流程已按過「決定」：先等，不要再點一次點到編隊畫面的「開始」。"""
+
+    def _run(self, grace, frames=12):
+        clock = [0.0]
+
+        def loop(*a, **k):
+            for i in range(frames):       # 每張隔 0.5 秒
+                yield i
+                clock[0] += 0.5
+        btn = mock.Mock()
+        btn.rect.center = (1010, 586)
+        dev = mock.Mock()
+        with mock.patch.object(hold_center, 'device', new=dev), \
+                mock.patch.object(hold_center, 'Loop', side_effect=loop), \
+                mock.patch.object(hold_center, '_frame', return_value=None), \
+                mock.patch.object(hold_center, '_at_unit_select', return_value=False), \
+                mock.patch.object(hold_center, 'at_song_select', return_value=btn), \
+                mock.patch.object(hold_center.time, 'time', side_effect=lambda: clock[0]):
+            hold_center._go_unit_select(grace=grace)
+        return dev
+
+    def test_waits_during_grace_then_taps_every_3_seconds(self) -> None:
+        dev = self._run(3.0)                 # 0~5.5 秒：3 秒後點一次，之後要隔 3 秒才補點
+        self.assertEqual(dev.click.call_count, 1)
+
+    def test_no_grace_taps_immediately(self) -> None:
+        dev = self._run(0.0, frames=1)
+        self.assertEqual(dev.click.call_count, 1)
+
+
 if __name__ == '__main__':
     unittest.main()
 
