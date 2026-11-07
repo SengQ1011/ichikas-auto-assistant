@@ -59,10 +59,13 @@ MAX_PLAYING_SECONDS = 15 * 60
 MAX_LOADING_SECONDS = 90
 # 载入本来就会静止十几秒，等这么久且画面静止才收成样本（其他步骤是 10 秒）
 LOADING_SAMPLE_SECONDS = 45
-# 结果（CLEAR／FAILED）用 OCR 读这两块（逻辑座标 1280x720，与 rhythm-auto 的模板位置相同）
-END_BANNER_BOX = HintBox(x1=235, y1=300, x2=1050, y2=410, source_resolution=(720, 1280))
-RESULT1_BOX = HintBox(x1=140, y1=300, x2=960, y2=410, source_resolution=(720, 1280))
-# 每次执行前几次打歌结束画面要截图（用来确认 OCR 有没有读对）
+# 结果（CLEAR／FAILED）用 OCR 读这一块（逻辑座标 1280x720）。
+# 「LIVE FAILED...」大字约在 y 280～392；原本 y 从 300 开始会切掉字的上半部，什么都读不到
+END_BANNER_BOX = HintBox(x1=100, y1=230, x2=1000, y2=430, source_resolution=(720, 1280))
+RESULT1_BOX = END_BANNER_BOX
+# 结算第 1 页（SCORE RANK）最多读几次才点下一页（字可能还在播进场动画）
+RESULT1_OCR_TRIES = 3
+# 每次执行前几次读到／读不到结果要截图（用来确认 OCR 有没有读对）
 OUTCOME_SHOTS = 2
 # 打歌时画面连续多久几乎没变化，就当作游戏／模拟器冻结
 FREEZE_SECONDS = 30
@@ -527,7 +530,8 @@ def _settle_to_song_select() -> None:
     guard = _run.guard('結算→選歌')
     taps = _Taps()
     started = time.time()
-    result1_read = False
+    result1_done = False
+    result1_tries = 0
     for _ in Loop(interval=0.4):
         img = _frame()
         guard.tick(img)
@@ -538,9 +542,16 @@ def _settle_to_song_select() -> None:
             guard.done()
             return
         if R.Live.TextScoreRank.exists():
-            if not result1_read:
-                result1_read = True
-                _read_outcome(RESULT1_BOX, '結算第1頁', override=True)
+            if not result1_done:
+                result1_tries += 1
+                got = _read_outcome(RESULT1_BOX, '結算第1頁', override=True)
+                if got is None and result1_tries < RESULT1_OCR_TRIES:
+                    continue  # 字可能还在播动画，下一张再读
+                result1_done = True
+                if got is None and _run.log.outcome is None and _run.log.stats['outcome_miss_shots'] < OUTCOME_SHOTS:
+                    _run.log.stats['outcome_miss_shots'] += 1
+                    shot = _run.log.shot(img, 'outcome_unreadable')
+                    _run.log.warn('结算', f'讀了 {result1_tries} 次都讀不到 CLEAR／FAILED，這輪記成「未知」，截圖 {shot}')
             _tap_xy(taps, 'score_rank', '结算', None, 'SCORE RANK，點畫面中央', action=device.click_center)
         elif _click(taps, 'result_next', '结算', R.Live.ButtonLiveCompletedNext, '下一頁'):
             pass

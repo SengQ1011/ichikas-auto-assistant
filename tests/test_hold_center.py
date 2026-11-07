@@ -537,5 +537,41 @@ class HoldGuardTests(unittest.TestCase):
         self.assertFalse(any(c.startswith('settings put') for c in cmds))
 
 
+class SettleOutcomeRetryTests(unittest.TestCase):
+    """結算第 1 頁：讀不到結果時最多讀 RESULT1_OCR_TRIES 次才點下一頁；讀到就馬上點。"""
+
+    def _settle(self, outcomes):
+        R = mock.MagicMock()
+        score_rank_frames = {'n': 0}
+
+        def score_rank():
+            score_rank_frames['n'] += 1
+            return score_rank_frames['n'] <= 10
+        R.Live.TextScoreRank.exists.side_effect = score_rank
+        song_select = iter([None] * 50)
+        reads = iter(outcomes)
+        taps = []
+        with mock.patch.object(hold_center, 'R', new=R), \
+                mock.patch.object(hold_center, 'device', new=mock.Mock()), \
+                mock.patch.object(hold_center, 'Loop', return_value=range(6)), \
+                mock.patch.object(hold_center, 'at_song_select', side_effect=lambda: next(song_select)), \
+                mock.patch.object(hold_center, '_frame', return_value=None), \
+                mock.patch.object(hold_center, '_read_outcome', side_effect=lambda *a, **k: next(reads, None)) as read, \
+                mock.patch.object(hold_center, '_tap_xy', side_effect=lambda *a, **k: taps.append(a[1])), \
+                mock.patch.object(hold_center, 'task_reporter', return_value=_FakeReporter()):
+            hold_center._settle_to_song_select()   # 只跑 6 張畫面，看前幾張怎麼處理
+        return read, taps
+
+    def test_clicks_immediately_when_read(self) -> None:
+        read, taps = self._settle(['FAILED'])
+        self.assertEqual(read.call_count, 1)
+        self.assertEqual(taps[0], 'score_rank')
+
+    def test_retries_then_gives_up(self) -> None:
+        read, taps = self._settle([None, None, None])
+        self.assertEqual(read.call_count, hold_center.RESULT1_OCR_TRIES)
+        self.assertEqual(taps[0], 'score_rank')            # 第 3 次讀不到後才點
+
+
 if __name__ == '__main__':
     unittest.main()
