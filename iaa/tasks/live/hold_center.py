@@ -98,6 +98,12 @@ GO_SONG_OFFSET = (-70, 4)
 GO_SONG_RETAP_AFTER = 3.0
 # 结算回到选歌画面最久等待时间
 MAX_SETTLE_SECONDS = 90
+# 结算中认不出的画面（例如「情谊等级UP！」、按下后发光认不出的「下一页」）：
+# 没有任何分支命中超过 UNKNOWN_TAP_AFTER 秒、画面静止时，每 UNKNOWN_TAP_EVERY 秒轮流点左侧空白／下一页的位置。
+# 可在此处调整等待秒数；新的已知画面请改成在 _settle_to_song_select 加分支。
+UNKNOWN_TAP_AFTER = 3.0
+UNKNOWN_TAP_EVERY = 2.0
+RESULT_NEXT_XY = (1129, 665)
 
 # 正在执行的这一次的记录（不在执行时是什么都不做的 NullRun）
 _run: 'Run | NullRun' = NullRun()
@@ -532,6 +538,10 @@ def _settle_to_song_select() -> None:
     started = time.time()
     result1_done = False
     result1_tries = 0
+    known_at = started        # 最后一次认出画面的时间
+    unknown_at = 0.0          # 最后一次后备点击的时间
+    unknown_count = 0
+    next_xy = RESULT_NEXT_XY  # 「下一页」最后看到的位置
     for _ in Loop(interval=0.4):
         img = _frame()
         guard.tick(img)
@@ -553,8 +563,9 @@ def _settle_to_song_select() -> None:
                     shot = _run.log.shot(img, 'outcome_unreadable')
                     _run.log.warn('结算', f'讀了 {result1_tries} 次都讀不到 CLEAR／FAILED，這輪記成「未知」，截圖 {shot}')
             _tap_xy(taps, 'score_rank', '结算', None, 'SCORE RANK，點畫面中央', action=device.click_center)
-        elif _click(taps, 'result_next', '结算', R.Live.ButtonLiveCompletedNext, '下一頁'):
-            pass
+        elif (next_obj := R.Live.ButtonLiveCompletedNext.find()) is not None:
+            next_xy = _center(next_obj) or next_xy
+            _tap_xy(taps, 'result_next', '结算', next_xy, '下一頁')
         elif _click(taps, 'go_song', '结算', R.Live.ButtonGoSongSelect,
                     '前往選擇歌曲（點按鈕左端：中央換到選歌畫面後是「隨機選歌」）',
                     offset=GO_SONG_OFFSET, retap_after=GO_SONG_RETAP_AFTER, on_change=False):
@@ -570,6 +581,21 @@ def _settle_to_song_select() -> None:
             _run.sample('home_return', img, '結算→選歌', {'note': '結算中回到主頁'})
             _run.notify.send(ORANGE, 'home_return', '結算中誤回主頁', '已自動重新進入演出', img)
             _enter_song_select_from_home()
+        else:
+            # 认不出的画面：先等一下（可能还在播动画），静止后轮流点左侧空白与「下一页」位置
+            now = time.time()
+            if now - known_at >= UNKNOWN_TAP_AFTER and now - unknown_at >= UNKNOWN_TAP_EVERY and not taps.moving:
+                unknown_at = now
+                unknown_count += 1
+                taps.key = None  # 之后再看到已知按钮时当成新画面，马上可以点
+                if unknown_count % 2 == 1:
+                    _side_tap()
+                    _run.log.tap('结算', None, f'認不出的畫面，點左側空白（第 {unknown_count} 次，{now - known_at:.0f} 秒沒認出畫面）')
+                else:
+                    device.click(int(next_xy[0]), int(next_xy[1]))
+                    _run.log.tap('结算', next_xy, f'認不出的畫面，點「下一頁」的位置（第 {unknown_count} 次，{now - known_at:.0f} 秒沒認出畫面）')
+            continue
+        known_at = time.time()
 
 
 def _side_tap() -> None:
