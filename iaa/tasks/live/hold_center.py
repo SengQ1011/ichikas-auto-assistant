@@ -40,7 +40,7 @@ from .. import R
 from ..common import at_home
 from ._scene import at_song_select
 from .hold_center_log import GREEN, ORANGE, RED, YELLOW, NullRun, Run, classify_outcome, diff, thumb
-from iaa.context import task_reporter
+from iaa.context import server, task_reporter
 from iaa.i18n import TStr, tstr
 
 logger = logging.getLogger(__name__)
@@ -98,7 +98,7 @@ GO_SONG_OFFSET = (-70, 4)
 GO_SONG_RETAP_AFTER = 3.0
 # 结算回到选歌画面最久等待时间
 MAX_SETTLE_SECONDS = 90
-# 结算中认不出的画面（例如「情谊等级UP！」、按下后发光认不出的「下一页」）：
+# 结算中认不出的画面（例如没有模板的服的「情谊等级UP！」、按下后发光认不出的「下一页」）：
 # 没有任何分支命中超过 UNKNOWN_TAP_AFTER 秒、画面静止时，每 UNKNOWN_TAP_EVERY 秒轮流点左侧空白／下一页的位置。
 # 可在此处调整等待秒数；新的已知画面请改成在 _settle_to_song_select 加分支。
 UNKNOWN_TAP_AFTER = 3.0
@@ -572,6 +572,12 @@ def _settle_to_song_select() -> None:
             pass
         elif R.Live.TextScoreRankReward.exists():
             _click(taps, 'rank_reward', '结算', R.Live.ButtonCloseScoreRankReward, '關閉 SCORE RANK 獎勵')
+        elif server() == 'tw' and R.Live.TextBondLevelUp.exists():
+            # 「情谊等级UP！」（目前只有台服模板）：先点左侧空白；连点两次还在就改点「下一页」的位置
+            if taps.key == 'bond_up' and taps.count >= 2:
+                _tap_xy(taps, 'bond_up', '结算', next_xy, '情誼等級UP！，點左側沒關掉，改點「下一頁」的位置')
+            else:
+                _tap_xy(taps, 'bond_up', '结算', None, '情誼等級UP！，點畫面左側跳過', action=_side_tap)
         elif R.Live.TextLevelUpBouns.exists() or R.Cm.TextAwardClaimed.exists():
             _tap_xy(taps, 'side_skip', '结算', None, '等級提升／獲得獎勵，點畫面左側跳過', action=_side_tap)
         elif at_home():

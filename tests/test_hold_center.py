@@ -599,12 +599,56 @@ class SettleUnknownScreenTests(unittest.TestCase):
                 mock.patch.object(hold_center, 'at_home', return_value=False), \
                 mock.patch.object(hold_center, '_frame', return_value=None), \
                 mock.patch.object(hold_center, '_side_tap', new=side), \
+                mock.patch.object(hold_center, 'server', return_value='jp'), \
                 mock.patch.object(hold_center.time, 'time', side_effect=lambda: clock[0]), \
                 mock.patch.object(hold_center, 'task_reporter', return_value=_FakeReporter()):
             hold_center._settle_to_song_select()   # 10 秒：3 秒後開始，每 2 秒一次 → 3、5、7、9 秒
         self.assertEqual(side.call_count, 2)
         self.assertEqual(dev.click.call_count, 2)
         dev.click.assert_called_with(*hold_center.RESULT_NEXT_XY)
+
+
+class SettleBondLevelUpTests(unittest.TestCase):
+    """台服「情誼等級UP！」：認得就馬上點左側；點兩次還在就改點「下一頁」位置。"""
+
+    def _run(self, srv: str):
+        R = mock.MagicMock()
+        R.Live.TextScoreRank.exists.return_value = False
+        R.Live.ButtonLiveCompletedNext.find.return_value = None
+        R.Live.ButtonGoSongSelect.find.return_value = None
+        R.Live.TextScoreRankReward.exists.return_value = False
+        R.Live.TextBondLevelUp.exists.return_value = True
+        R.Live.TextLevelUpBouns.exists.return_value = False
+        R.Cm.TextAwardClaimed.exists.return_value = False
+        clock = [0.0]
+
+        def loop(*a, **k):
+            for i in range(8):         # 每張畫面隔 0.5 秒，共 4 秒
+                yield i
+                clock[0] += 0.5
+        dev = mock.Mock()
+        side = mock.Mock()
+        with mock.patch.object(hold_center, 'R', new=R), \
+                mock.patch.object(hold_center, 'device', new=dev), \
+                mock.patch.object(hold_center, 'Loop', side_effect=loop), \
+                mock.patch.object(hold_center, 'at_song_select', return_value=False), \
+                mock.patch.object(hold_center, 'at_home', return_value=False), \
+                mock.patch.object(hold_center, '_frame', return_value=None), \
+                mock.patch.object(hold_center, '_side_tap', new=side), \
+                mock.patch.object(hold_center, 'server', return_value=srv), \
+                mock.patch.object(hold_center.time, 'time', side_effect=lambda: clock[0]), \
+                mock.patch.object(hold_center, 'task_reporter', return_value=_FakeReporter()):
+            hold_center._settle_to_song_select()
+        return R, dev, side
+
+    def test_tw_side_tap_then_next(self) -> None:
+        _, dev, side = self._run('tw')
+        self.assertEqual(side.call_count, 2)                   # 0 秒、1 秒各點一次左側
+        dev.click.assert_called_with(*hold_center.RESULT_NEXT_XY)  # 之後改點下一頁位置
+
+    def test_other_servers_skip_template(self) -> None:
+        R, _, _ = self._run('jp')
+        R.Live.TextBondLevelUp.exists.assert_not_called()      # 沒有 jp/cn/en 模板，不能呼叫
 
 
 if __name__ == '__main__':

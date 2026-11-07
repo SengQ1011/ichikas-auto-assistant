@@ -1,0 +1,26 @@
+{
+  "version": 3,
+  "definitions": {
+    "f38a21ad-accd-4e95-af06-f1d6e2748386": {
+      "type": "prefab",
+      "prefab_id": "TemplateMatchPrefab",
+      "name": "Live.TextBondLevelUp",
+      "props": {
+        "template": {
+          "kind": "image",
+          "x1": 455,
+          "y1": 222,
+          "x2": 815,
+          "y2": 292
+        },
+        "fixed": true
+      },
+      "displayName": "结算「情谊等级UP！」横幅（台服）",
+      "variant_policy": {
+        "tw": "inherit",
+        "cn": "exclude",
+        "en": "exclude"
+      }
+    }
+  }
+}
