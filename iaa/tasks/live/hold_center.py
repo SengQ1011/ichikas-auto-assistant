@@ -10,8 +10,10 @@
 - 换歌：第 1 轮记下封面与歌名（OCR），之后每轮按开始前比对；换了就关游戏重开、搜寻歌名找回，
   连续 SONG_FIX_TRIES 次找不回来才停止。
 - 自动停止（换歌找不回、0 火确认失败、连续卡住、错误）时一律关闭游戏；使用者按停止时不关。
-- 长按防护：用第 1 号手指（滑鼠点模拟器视窗时多半用第 0 号，会把第 0 号的长按放开），
-  而且每 HOLD_REFRESH_SECONDS 秒重新按一次，被放开最多这么久就恢复。
+- 长按防护：用第 1 号手指（滑鼠点模拟器视窗时多半用第 0 号，会把第 0 号的长按放开）。
+  一首歌从头到尾一直按住，中途不放开（放开再按下在游戏里等于点一下）。
+  每 HOLD_REASSERT_SECONDS 秒对同一根手指再送一次「按下」（不先放开）：还按着时只是原地移动，
+  被放开时（例如 MuMu 视窗缩到工作列再打开）就会重新按住。
   打歌时打开 Android「显示触控」，模拟器画面上看得到按住的位置；打完这首就恢复原设定。
 - 卡住处理：某一步超过时限、或打歌画面冻结，就关闭游戏重开、回到选歌画面继续；
   连续重开 MAX_RESTARTS 次仍卡住才停止任务。重开后会重新确认 0 火。
@@ -47,8 +49,8 @@ logger = logging.getLogger(__name__)
 HOLD_POINT = (640, 570)
 # 用第 1 号手指：在模拟器视窗上用滑鼠点击时多半是第 0 号，会把第 0 号的长按放开
 HOLD_CONTACT_ID = 1
-# 打歌时每隔几秒重新按一次（放开再马上按下），被外部放开最多这么久就恢复
-HOLD_REFRESH_SECONDS = 3.0
+# 打歌时每隔几秒对同一根手指再送一次「按下」（不放开），被模拟器放开后最多这么久就按回去
+HOLD_REASSERT_SECONDS = 1.0
 # 打歌时是否打开 Android「显示触控」（画面上看得到按住的位置）
 SHOW_TOUCHES = True
 # 打歌画面最久停留时间：超过就当作卡住
@@ -329,23 +331,21 @@ def _hold_start() -> None:
     _set_show_touches(True)
     px, py = _hold_point()
     device.multi_touch.multi_touch_down(px, py, HOLD_CONTACT_ID)
-    _run.log.info('打歌画面', f'開始長按判定線中央 {HOLD_POINT}（第 {HOLD_CONTACT_ID} 號手指，'
-                              f'每 {HOLD_REFRESH_SECONDS:.0f} 秒重新按一次）')
+    _run.log.info('打歌画面', f'開始長按判定線中央 {HOLD_POINT}（第 {HOLD_CONTACT_ID} 號手指，整首不放開，'
+                              f'每 {HOLD_REASSERT_SECONDS:.0f} 秒補送一次按下）')
 
 
-def _hold_repress() -> None:
-    """放开再马上按下：就算这根手指被外部（例如滑鼠点模拟器视窗）放开了，也会重新按住。"""
+def _hold_reassert() -> None:
+    """同一根手指再按下一次、不先放开：还按着时等于原地移动，被放开了就重新按住。"""
     px, py = _hold_point()
-    device.multi_touch.multi_touch_up(px, py, HOLD_CONTACT_ID)
-    sleep(0.03)
     device.multi_touch.multi_touch_down(px, py, HOLD_CONTACT_ID)
 
 
-def _hold_stop(held_seconds: float = 0.0, represses: int = 0) -> None:
+def _hold_stop(held_seconds: float = 0.0) -> None:
     try:
         px, py = _hold_point()
         device.multi_touch.multi_touch_up(px, py, HOLD_CONTACT_ID)
-        _run.log.info('打歌画面', f'放開長按（按住 {held_seconds:.0f} 秒，重新按下 {represses} 次）')
+        _run.log.info('打歌画面', f'放開長按（按住 {held_seconds:.0f} 秒）')
     except Exception:
         logger.exception('Failed to release hold.')
     finally:
@@ -464,7 +464,6 @@ def _play_holding() -> None:
     life_last_seen = 0.0
     holding = False
     hold_since = last_press = 0.0
-    represses = 0
     last_thumb: np.ndarray | None = None
     still_since = time.time()
     loading = _run.guard('開始→打歌畫面', wait_seconds=LOADING_SAMPLE_SECONDS)
@@ -496,13 +495,12 @@ def _play_holding() -> None:
                     _hold_start()
                     holding = True
                     hold_since = last_press = now
-                elif now - last_press >= HOLD_REFRESH_SECONDS:
-                    _hold_repress()
-                    represses += 1
+                elif now - last_press >= HOLD_REASSERT_SECONDS:
+                    _hold_reassert()
                     last_press = now
                 rep.message(TStr(
-                    zh_CN=f'长按中央打歌中，已按住 {now - hold_since:.0f} 秒（重新按下 {represses} 次）',
-                    en_US=f'Holding center for {now - hold_since:.0f}s (re-pressed {represses} times)',
+                    zh_CN=f'长按中央打歌中，已按住 {now - hold_since:.0f} 秒',
+                    en_US=f'Holding center for {now - hold_since:.0f}s',
                 ))
             else:
                 if seen_life and _run.log.outcome is None:
@@ -513,7 +511,7 @@ def _play_holding() -> None:
                     return
     finally:
         if holding:
-            _hold_stop(time.time() - hold_since, represses)
+            _hold_stop(time.time() - hold_since)
             _run.log.mark('play_end')
             if play_guard is not None:
                 play_guard.done()

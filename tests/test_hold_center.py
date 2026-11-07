@@ -516,13 +516,13 @@ class HoldGuardTests(unittest.TestCase):
             hold_center._play_holding()
         return dev, shell
 
-    def test_contact_one_repress_every_three_seconds_and_release(self) -> None:
+    def test_contact_one_held_and_reasserted_never_released_midway(self) -> None:
         dev, _ = self._play()
         downs = dev.multi_touch.multi_touch_down.call_args_list
         ups = dev.multi_touch.multi_touch_up.call_args_list
         self.assertTrue(all(c.args == (800, 712, 1) for c in downs))   # 第 1 號手指、換算成實際座標
-        self.assertEqual(len(downs), 1 + 3)                             # 第 0 秒按下，3、6、9 秒重新按
-        self.assertEqual(len(ups), 3 + 1)                               # 重新按 3 次 + 最後放開
+        self.assertGreaterEqual(len(downs), 9)                          # 每秒補送一次按下（10 秒的歌）
+        self.assertEqual(len(ups), 1)                                   # 中途不放開，打完才放開
 
     def test_show_touches_turned_on_then_restored(self) -> None:
         _, shell = self._play('0')
